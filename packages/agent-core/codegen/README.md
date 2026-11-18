@@ -13,6 +13,7 @@ Celery/Redis dependency. The Celery adapter lives in `workers/ai-agent`.
 |---|---|---|
 | `androai_codegen.editing` | Safe multi-file patch engine: path validation, checksums, conflict detection, atomic apply, rollback, journal | Phase 1 |
 | `androai_codegen.vcs` | Shadow-git checkpoints, diffs, summaries, file history, manual-vs-AI tracking, manual-change-safe restore. Needs `git` on PATH | Phase 2 |
+| `androai_codegen.review` | Static review of Kotlin/Java/XML/Gradle: syntax, imports, duplicates, resources; reviews a patch before it is applied. Never compiles or runs code | Phase 4a |
 
 See [docs/CODE_GENERATION_PROGRESS.md](../../../docs/CODE_GENERATION_PROGRESS.md) for architecture,
 safety rules, verification status and known limitations.

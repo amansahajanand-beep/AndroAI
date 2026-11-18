@@ -152,6 +152,13 @@ class PatchPreview(_Model):
         return "; ".join(f"[{p.code.value}] {p.path or '<patch>'}: {p.message}" for p in shown)
 
 
+class Simulation(_Model):
+    """What a patch would produce, without writing anything (used by code review)."""
+
+    preview: PatchPreview
+    files: dict[str, str | None]  # path -> new text; None means the file would be deleted
+
+
 # --- audit trail -----------------------------------------------------------------------
 
 

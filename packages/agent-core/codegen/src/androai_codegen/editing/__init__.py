@@ -28,6 +28,7 @@ from .models import (
     ProblemCode,
     RecoveryReport,
     RollbackResult,
+    Simulation,
     TextEdit,
 )
 from .paths import normalize_relative_path
@@ -62,6 +63,7 @@ __all__ = [
     "RecoveryReport",
     "RollbackConflict",
     "RollbackResult",
+    "Simulation",
     "TextEdit",
     "UnknownPatchError",
     "Workspace",

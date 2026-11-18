@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal
 
@@ -13,6 +14,15 @@ from .fsio import atomic_write_bytes
 from .paths import normalize_relative_path
 
 PathKind = Literal["missing", "file", "dir", "other"]
+
+_SKIPPED_DIRS = frozenset(
+    {".git", ".gradle", ".idea", "build", "node_modules", ".cxx", ".externalNativeBuild"}
+)
+
+
+def _is_link(path: Path) -> bool:
+    is_junction = getattr(path, "is_junction", None)
+    return path.is_symlink() or (is_junction is not None and is_junction())
 
 
 class Workspace:
@@ -82,6 +92,30 @@ class Workspace:
 
     def delete(self, rel_path: str) -> None:
         self.resolve(rel_path).unlink()
+
+    def iter_files(self) -> Iterator[str]:
+        """Relative paths of regular files in sorted order, skipping VCS/build directories.
+
+        Symlinks and junctions are never followed or listed, so a link cannot make the walk
+        escape the workspace. Paths this engine would refuse to touch are not listed either.
+        """
+        found: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(self.root, followlinks=False):
+            current = Path(dirpath)
+            dirnames[:] = [
+                d for d in dirnames if d not in _SKIPPED_DIRS and not _is_link(current / d)
+            ]
+            for name in filenames:
+                full = current / name
+                if _is_link(full):
+                    continue
+                rel = full.relative_to(self.root).as_posix()
+                try:
+                    normalize_relative_path(rel)
+                except PathValidationError:
+                    continue
+                found.append(rel)
+        yield from sorted(found)
 
     def missing_dirs(self, rel_path: str) -> list[str]:
         """Parent directories of ``rel_path`` that do not exist yet, outermost first."""

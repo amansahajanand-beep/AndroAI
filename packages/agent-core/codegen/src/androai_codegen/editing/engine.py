@@ -53,6 +53,7 @@ from .models import (
     ProblemCode,
     RecoveryReport,
     RollbackResult,
+    Simulation,
     TextEdit,
     utcnow,
 )
@@ -208,6 +209,16 @@ class PatchEngine:
     def preview(self, patch: PatchSet, approved_deletions: Iterable[str] = ()) -> PatchPreview:
         """Validate without writing anything. Safe to call at any time."""
         return self._plan(patch, approved_deletions).to_preview()
+
+    def simulate(self, patch: PatchSet, approved_deletions: Iterable[str] = ()) -> Simulation:
+        """Like :meth:`preview`, but also returns the resulting text of every changed file.
+
+        Lets a reviewer inspect the project *as it would be after the patch* without writing
+        anything. Deleted files map to ``None``.
+        """
+        plan = self._plan(patch, approved_deletions)
+        files = {op.path: None if op.after is None else op.after.decode("utf-8") for op in plan.ops}
+        return Simulation(preview=plan.to_preview(), files=files)
 
     def _plan(self, patch: PatchSet, approved_deletions: Iterable[str]) -> _Plan:
         plan = _Plan()
