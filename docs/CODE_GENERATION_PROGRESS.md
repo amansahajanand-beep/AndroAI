@@ -5,10 +5,10 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | Phase | Scope | State |
 |---|---|---|
 | 0 | Package setup, dev environment, this document | Done |
-| 1 | File-editing abstraction and patch engine | **Done, verified on Windows only** (see Verification) |
-| 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows only** (see Verification) |
+| 1 | File-editing abstraction and patch engine | **Done, hardened (`5aea805`), verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
+| 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
-| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows only. **4b not started**: manifest, navigation, dependencies, security, API usage, null safety, change-aware rules. |
+| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures only; **not yet validated on a real project**. **4b not started**: manifest, navigation, dependencies, security, API usage, null safety, change-aware rules. |
 | 5 | New project generation | Not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
@@ -160,13 +160,16 @@ The patch engine is language-agnostic: it edits UTF-8 text files and knows nothi
 
 ## Verification
 
-Run on Windows 10, Python 3.12.10, in `.venv` at the repo root:
+Results below are for `p3/review-engine` at commit `5aea805` (Phase 4a plus the patch-engine hardening).
 
-| Check | Result |
+| Platform | `pytest packages/agent-core/codegen` | Ruff |
+|---|---|---|
+| Windows 10, Python 3.12.10, Git 2.56.1 | **410 passed, 5 skipped** (about 1-2 min: the VCS tests spawn git) | `ruff check` clean; `ruff format --check` clean (50 files); `compileall` clean |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4), exported copy of the same commit | **414 passed, 1 skipped** | `ruff check` clean |
+
+| Other check | Result |
 |---|---|
-| `pytest packages/agent-core/codegen` | 394 passed, 5 skipped (about 105 s: the VCS tests spawn git) |
 | `pytest packages/contracts` (untouched) | 2 passed |
-| `ruff check` / `ruff format --check` | clean |
 | CI import check for all four workers, alongside `androai_codegen` | OK (last run before Phase 4) |
 | Mutation check, Phase 1: 16 safety mechanisms disabled one at a time | All 16 caught (first run caught 15; the 16th, workspace containment, got its own test) |
 | Mutation check, Phase 2: 16 more | All 16 caught (first run caught 15; the survivor was "only the last paragraph of a commit message is trusted", now has its own test) |
@@ -191,13 +194,43 @@ Real bugs the Phase 4a tests found (all fixed, each with a regression test):
 - Treating every `Theme.*` as a library style would have hidden the common mistake of referencing an app theme
   that was never defined; only library-specific prefixes are skipped now.
 
-Git used: 2.56.1 (Windows). The 5 skipped tests are 2 POSIX-permission-bit tests, 1 POSIX-only file-name test
-(none apply on Windows) and 2 plain-symlink tests (this account cannot create symlinks). The equivalent NTFS
-**junction** tests did run.
+Patch-engine hardening (commit `5aea805`). Found by reading the branches the tests did not reach (the `editing`
+package was at 95% line coverage) and reproducing each one. The regression tests were written first:
+`tests/test_editing_hardening.py` has 16 tests and 11 of them failed on the old code. The other 5 guard behaviour
+that was already correct.
 
-**Never run on Linux or in CI**, which is where the workers run. POSIX code paths (permission bits, symlinks,
-`fcntl`-based locking inside `filelock`) and other git versions are untested. Git's timestamp handling differs
-between platforms, which is exactly the area where the bug above lived.
+1. **The `[REDACTED]` guard could be bypassed.** It compared the text an edit *inserts* with the old file, so a
+   patch could add a marker to a file that already contained one, or multiply one with `replace_all`. It now
+   compares the *resulting* file with the original. (A patch can still swap one marker for another, because the
+   count does not change.)
+2. **One bad journal record aborted crash recovery for every patch.** `recover()` runs at worker start-up, so a
+   single corrupt manifest, missing pre-image or unreadable path could stop the worker from starting. Each patch
+   is now recovered on its own and a damaged one is reported under `needs_attention`; the rest are still
+   recovered. `rollback()` now reports a path it cannot inspect as a `RollbackConflict` instead of a raw error.
+   New `Journal.scan()` returns readable manifests and the unreadable ones separately.
+3. **`journal.json` holding valid JSON that is not an object** (`[]`, `null`, `123`) crashed with
+   `AttributeError`. It now raises `JournalError`.
+
+### Platform coverage (Windows and Linux together)
+
+Some tests can only run on one operating system, so each platform skips some. Together they cover all 415 tests:
+
+| Test | Windows | Linux |
+|---|---|---|
+| 2 POSIX permission-bit tests (executable bit kept, e.g. `gradlew`) | skipped (no execute bit) | **passed** |
+| 1 POSIX-only file-name test (names NTFS cannot create) | skipped | **passed** |
+| 2 plain-symlink tests (symlink in the workspace is rejected) | skipped (this account cannot create symlinks) | **passed** |
+| 1 NTFS-junction test | **passed** | skipped (Windows-only) |
+| the other 409 tests | passed | passed |
+
+The equivalent NTFS **junction** escape tests also ran on Windows, so the containment check is exercised on both.
+The Linux run used an exported copy of the commit inside the WSL ext4 filesystem (real symlinks and permission
+bits; running from `/mnt/c` would make those tests unreliable). That also covered the POSIX code paths and the
+`fcntl`-based locking inside `filelock`, and Git's different timestamp handling, which is where the `pending_changes`
+bug above lived. It was run once, by hand, with one Python and one git version.
+
+**Still not run in CI.** `.github/workflows/ci.yml` does not install or test codegen (see "Needs action from other
+owners"), so nothing re-runs these checks automatically on push.
 
 ## Known limitations
 
@@ -247,6 +280,28 @@ Phase 4 (code review):
 - Multi-module projects are treated as one: resources and dependencies are looked up project-wide (permissive).
 - Resource types a library may legitimately provide (`style`, and names with library prefixes) are skipped, so
   a typo in such a name is not caught.
+- **Only three rule groups run** (`syntax`, `imports`, `resources`; 12 rule ids). The analysis layer already parses
+  the manifest (package, permissions, components, launcher), Gradle scripts and the version catalog, and resolves
+  dependency aliases, but **no rule uses that data yet**: nothing checks the manifest, navigation, dependencies,
+  permissions or security. `rules/changes.py` is a placeholder that returns nothing, so there is no "this patch
+  removed a component / permission / dependency" check. There is no language or framework detector.
+- A review report with no findings therefore says nothing about the manifest, permissions, dependencies or
+  navigation. It must not be presented as "the project is safe".
+
+## Unfinished integration work
+
+Not done, and not part of 4a:
+
+- **Phase 4b** (manifest, navigation, dependency/Gradle, security, API-use, null-safety and change-aware rules).
+- **Real-project validation** of the review engine (false-positive rate, parser coverage on real Gradle/XML,
+  performance). Required before any finding is allowed to block a patch in production.
+- **Review is not wired to checkpoints.** `review_patch` works on a `PatchEngine`; running a review against a
+  `CheckpointManager` checkpoint is not implemented.
+- **No worker integration.** `workers/ai-agent` does not import `androai_codegen`; nothing consumes `CodingTask`,
+  and `ReviewReport` is not mapped to the contract's `ReviewFinding` (the field names already match).
+- **Contracts** are still a proposal awaiting Persons 2 and 4. **CI** does not install or test codegen, and the
+  ai-agent image has no codegen package or git (details below).
+- **Push is blocked** (HTTP 403 for the current account). Everything on `p3/review-engine` is local.
 
 ## Needs action from other owners
 
