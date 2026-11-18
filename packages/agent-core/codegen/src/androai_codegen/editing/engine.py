@@ -354,7 +354,6 @@ class PatchEngine:
                 assert code is not None
                 plan.problem(code, rel, message)
                 return
-            supplied = "".join(edit.new for edit in change.edits)
         else:
             assert change.content is not None
             new_text = (
@@ -362,9 +361,10 @@ class PatchEngine:
                 if change.normalize_eol
                 else change.content
             )
-            supplied = change.content
 
-        if count_redaction_markers(supplied) > count_redaction_markers(text):
+        # Compare the *result* with the original, so a patch can neither add a marker to a file
+        # that already has one nor multiply one through replace_all.
+        if count_redaction_markers(new_text) > count_redaction_markers(text):
             plan.problem(
                 ProblemCode.REDACTION_MARKER,
                 rel,
@@ -544,7 +544,19 @@ class PatchEngine:
             ops: list[_Op] = []
             conflicts: list[Problem] = []
             for entry in manifest.entries:
-                if self.workspace.kind(entry.path) not in ("file", "missing"):
+                try:
+                    kind = self.workspace.kind(entry.path)
+                    current = self.workspace.read_bytes(entry.path) if kind == "file" else None
+                except (PathValidationError, OSError) as exc:
+                    conflicts.append(
+                        Problem(
+                            code=ProblemCode.CONFLICT,
+                            path=entry.path,
+                            message=f"cannot inspect path: {exc}",
+                        )
+                    )
+                    continue
+                if kind not in ("file", "missing"):
                     conflicts.append(
                         Problem(
                             code=ProblemCode.CONFLICT,
@@ -553,7 +565,6 @@ class PatchEngine:
                         )
                     )
                     continue
-                current = self._current(entry.path)
                 current_sum = None if current is None else sha256_hex(current)
                 if current_sum == entry.previous_checksum:
                     continue  # already back at the original state
@@ -595,46 +606,65 @@ class PatchEngine:
         """
         report = RecoveryReport()
         with self._lock():
-            for manifest in self.journal.list_patches():
+            manifests, unreadable = self.journal.scan()
+            # A damaged record must not stop recovery of the others (this runs at start-up).
+            for patch_id, reason in unreadable.items():
+                report.needs_attention[patch_id] = [
+                    Problem(
+                        code=ProblemCode.IO_ERROR, message=f"unreadable journal record: {reason}"
+                    )
+                ]
+            for manifest in manifests:
                 if manifest.status != "applying":
                     continue
-                ops: list[_Op] = []
-                problems: list[Problem] = []
-                for entry in manifest.entries:
-                    current = self._current(entry.path)
-                    current_sum = None if current is None else sha256_hex(current)
-                    if current_sum == entry.previous_checksum:
-                        continue
-                    if current_sum == entry.new_checksum:
-                        original = (
-                            None
-                            if entry.preimage is None
-                            else self.journal.read_preimage(manifest.patch_id, entry)
-                        )
-                        ops.append(_Op(entry.path, current, original))
-                    else:
-                        problems.append(
-                            Problem(
-                                code=ProblemCode.CONFLICT,
-                                path=entry.path,
-                                message="neither original nor patched content; left untouched",
-                            )
-                        )
-                if not problems:
-                    try:
-                        self._execute(ops)
-                    except Exception as exc:
-                        problems.append(
-                            Problem(code=ProblemCode.IO_ERROR, message=f"recovery failed: {exc}")
-                        )
+                try:
+                    problems = self._recover_one(manifest)
+                except Exception as exc:  # one bad patch must not abort the rest
+                    problems = [
+                        Problem(code=ProblemCode.IO_ERROR, message=f"recovery failed: {exc}")
+                    ]
                 if problems:
-                    self.journal.set_status(manifest.patch_id, "needs_attention", utcnow())
+                    # If even this fails the status stays "applying"; the next recover() retries.
+                    with contextlib.suppress(Exception):
+                        self.journal.set_status(manifest.patch_id, "needs_attention", utcnow())
                     report.needs_attention[manifest.patch_id] = problems
                 else:
-                    self.workspace.remove_empty_dirs(manifest.created_dirs)
-                    self.journal.set_status(manifest.patch_id, "rolled_back", utcnow())
                     report.recovered.append(manifest.patch_id)
         return report
+
+    def _recover_one(self, manifest: JournalManifest) -> list[Problem]:
+        """Restore one crashed patch. Returns problems; empty means it was rolled back."""
+        ops: list[_Op] = []
+        problems: list[Problem] = []
+        for entry in manifest.entries:
+            current = self._current(entry.path)
+            current_sum = None if current is None else sha256_hex(current)
+            if current_sum == entry.previous_checksum:
+                continue
+            if current_sum == entry.new_checksum:
+                original = (
+                    None
+                    if entry.preimage is None
+                    else self.journal.read_preimage(manifest.patch_id, entry)
+                )
+                ops.append(_Op(entry.path, current, original))
+            else:
+                problems.append(
+                    Problem(
+                        code=ProblemCode.CONFLICT,
+                        path=entry.path,
+                        message="neither original nor patched content; left untouched",
+                    )
+                )
+        if problems:
+            return problems
+        try:
+            self._execute(ops)
+        except Exception as exc:
+            return [Problem(code=ProblemCode.IO_ERROR, message=f"recovery failed: {exc}")]
+        self.workspace.remove_empty_dirs(manifest.created_dirs)
+        self.journal.set_status(manifest.patch_id, "rolled_back", utcnow())
+        return []
 
     # -- history ------------------------------------------------------------------------
 

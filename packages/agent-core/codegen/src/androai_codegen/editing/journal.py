@@ -43,9 +43,12 @@ class Journal:
         marker = self.root / "journal.json"
         if marker.exists():
             try:
-                owner = json.loads(marker.read_text(encoding="utf-8")).get("project_id")
+                data = json.loads(marker.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
                 raise JournalError(f"unreadable journal marker: {marker}") from exc
+            if not isinstance(data, dict):
+                raise JournalError(f"unreadable journal marker (not an object): {marker}")
+            owner = data.get("project_id")
             if owner != project_id:
                 raise JournalError(f"journal belongs to project {owner!r}, not {project_id!r}")
         else:
@@ -96,6 +99,26 @@ class Journal:
             ):
                 manifests.append(self.load(child.name))
         return sorted(manifests, key=lambda m: m.created_at)
+
+    def scan(self) -> tuple[list[JournalManifest], dict[str, str]]:
+        """Like :meth:`list_patches`, but a corrupt record is reported instead of raised.
+
+        Returns ``(manifests, unreadable)`` where ``unreadable`` maps patch id to the reason.
+        Used by crash recovery, where one damaged record must not hide the others.
+        """
+        manifests: list[JournalManifest] = []
+        unreadable: dict[str, str] = {}
+        for child in self.root.iterdir():
+            if (
+                child.is_dir()
+                and _PATCH_ID.fullmatch(child.name)
+                and (child / "manifest.json").is_file()
+            ):
+                try:
+                    manifests.append(self.load(child.name))
+                except (JournalError, OSError) as exc:
+                    unreadable[child.name] = str(exc)
+        return sorted(manifests, key=lambda m: m.created_at), unreadable
 
     def read_preimage(self, patch_id: str, entry: JournalEntry) -> bytes:
         if entry.preimage is None or not _PREIMAGE.fullmatch(entry.preimage):
