@@ -7,6 +7,8 @@ LangGraph-based agent orchestration worker.
 - Queue: `Queues.ORCHESTRATION` from `androai-contracts`
 - Env: `REDIS_URL` (required), `WORKER_CONCURRENCY` (optional)
 
-Foundation only: no tasks are implemented yet. Add tasks under `src/androai_orchestration/` and
-register them in `celery_app.py`. Exchange data using models from
-`packages/contracts`; do not define duplicates here.
+Thin Celery layer over `packages/agent-core/orchestration`. Tasks: `tasks.py`; wiring: `runtime.py`;
+config: `config.py` (env `PROVIDERS_CONFIG_PATH` -> JSON like `providers.example.json`, plus `DATABASE_URL`,
+`REDIS_URL`, provider key env vars). `celery beat` is needed for periodic `recover_runs`.
+`ProjectWorkspace` is not wired yet (Person 4 dependency): see docs/AI_ORCHESTRATION_PROGRESS.md.
+Exchange data using models from `packages/contracts`; do not define duplicates here.

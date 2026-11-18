@@ -9,11 +9,24 @@ description = "LangGraph-based agent orchestration worker."
 requires-python = ">=3.11"
 dependencies = [
     "androai-contracts",
+    "androai-orchestration-core",
     "celery[redis]>=5.4",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+    "redis>=5.0",
 ]
+
+[project.optional-dependencies]
+anthropic = ["androai-orchestration-core[anthropic]"]
+openai = ["androai-orchestration-core[openai]"]
+postgres = ["androai-orchestration-core[postgres]"]
+dev = ["pytest>=8"]
 
 [project.scripts]
 androai-orchestration = "androai_orchestration.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,27 @@
+{
+  "providers": {
+    "anthropic": {"type": "anthropic", "api_key_env": "ANTHROPIC_API_KEY"},
+    "openai": {"type": "openai_compatible", "api_key_env": "OPENAI_API_KEY"}
+  },
+  "llm": {
+    "models": [
+      {"provider": "anthropic", "model": "claude-sonnet-5-5", "context_window": 200000, "max_output_tokens": 16000,
+       "input_price_per_mtok": null, "output_price_per_mtok": null},
+      {"provider": "anthropic", "model": "claude-haiku-5-5", "context_window": 200000, "max_output_tokens": 8192,
+       "input_price_per_mtok": null, "output_price_per_mtok": null}
+    ],
+    "routes": {
+      "requirements": {"models": ["anthropic:claude-sonnet-5-5"]},
+      "architecture": {"models": ["anthropic:claude-sonnet-5-5"]},
+      "planning": {"models": ["anthropic:claude-sonnet-5-5"]},
+      "impact": {"models": ["anthropic:claude-sonnet-5-5"]},
+      "root_cause": {"models": ["anthropic:claude-sonnet-5-5"]},
+      "classification": {"models": ["anthropic:claude-haiku-5-5", "anthropic:claude-sonnet-5-5"]}
+    },
+    "retry": {"max_attempts": 3, "timeout_seconds": 120}
+  },
+  "limits": {
+    "max_repair_attempts": 3,
+    "budget": {"max_total_tokens": 400000, "max_llm_calls": 40}
+  }
+}

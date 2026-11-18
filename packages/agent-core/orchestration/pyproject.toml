@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "androai-orchestration-core"
+version = "0.1.0"
+description = "Orchestration library: provider abstraction, project intelligence, planning, LangGraph workflows."
+requires-python = ">=3.11"
+dependencies = [
+    "androai-contracts",
+    "pydantic>=2.7,<3",
+    "langgraph>=1.0",
+    "defusedxml>=0.7",
+    "sqlalchemy>=2.0",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+openai = ["openai>=1.50"]
+postgres = ["langgraph-checkpoint-postgres>=2.0", "psycopg[binary]>=3.2"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]

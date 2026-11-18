@@ -30,7 +30,7 @@ Object storage (S3-compatible) holds project snapshots, APKs, logs and reports. 
 |---|---|---|
 | apps/web | UI | Placeholder page + API status check |
 | apps/api | HTTP API, auth, persistence, task dispatch | `/health`, `/api/v1/health/ready`, error envelope, DB/Redis abstractions |
-| workers/orchestration | Agent workflow (LangGraph planned) | Celery skeleton |
+| workers/orchestration + packages/agent-core/orchestration | Provider abstraction, project intelligence, planning, LangGraph workflows (new app / modify / repair) | Implemented; see [AI_ORCHESTRATION_PROGRESS.md](AI_ORCHESTRATION_PROGRESS.md) |
 | workers/ai-agent | Code generation | Celery skeleton |
 | workers/android-build | Gradle builds | Celery skeleton |
 | workers/android-test | Android tests | Celery skeleton |
@@ -49,4 +49,12 @@ Schemas are versioned via `schema_version` (`ContractModel`); unknown fields are
 
 ## Not yet decided / deferred
 
-LangGraph checkpoint storage, LLM provider abstraction design, auth flows, object-storage client (`packages/storage`), sandboxing model for builds (see SECURITY.md).
+Auth flows, object-storage client (`packages/storage`), sandboxing model for builds (see SECURITY.md).
+
+## Orchestration layer (Person 2)
+
+- **Library vs worker.** `packages/agent-core/orchestration` holds all logic (providers, intelligence, planning, workflows, persistence); `workers/orchestration` only wires env config and Celery tasks.
+- **Workflows** are LangGraph graphs checkpointed per run (`thread_id = run_id`, PostgreSQL saver in deployment). Waits for humans and for other services are LangGraph interrupts; results from other services are stored in `orch_agent_jobs` first and read by the waiting node, so delivery is idempotent and race-free.
+- **Ports** (`ProjectWorkspace`, `CodingEngine`, `ValidationRunner`, `LogReader`) isolate the orchestration from storage, the codegen worker and the build workers.
+- **Persistence** uses the shared PostgreSQL via an injected SQLAlchemy engine; tables are prefixed `orch_`. No duplicate storage of project source.
+- Flow of one run: API -> `start_run` -> plan (LLM) -> human approval -> `CodingTask`s -> `CodingResult` -> `BuildJob`/`TestJob` -> results -> success, or classify -> repair/infra-retry (bounded).
