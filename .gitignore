@@ -1,0 +1,40 @@
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Android / Gradle (generated projects, local SDKs)
+.gradle/
+local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Docker volumes / logs
+*.log

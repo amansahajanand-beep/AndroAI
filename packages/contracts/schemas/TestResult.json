@@ -1,0 +1,107 @@
+{
+  "$defs": {
+    "ErrorInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "default": "0.1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "title": "Retryable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorInfo",
+      "type": "object"
+    },
+    "TaskState": {
+      "description": "Lifecycle shared by every job/task type.",
+      "enum": [
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "title": "TaskState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "default": "0.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "test_job_id": {
+      "title": "Test Job Id",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/TaskState"
+    },
+    "passed": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Passed",
+      "type": "integer"
+    },
+    "failed": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Failed",
+      "type": "integer"
+    },
+    "skipped": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Skipped",
+      "type": "integer"
+    },
+    "report_key": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Report Key"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "test_job_id",
+    "state"
+  ],
+  "title": "TestResult",
+  "type": "object"
+}

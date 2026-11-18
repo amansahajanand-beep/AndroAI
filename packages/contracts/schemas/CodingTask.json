@@ -1,0 +1,97 @@
+{
+  "$defs": {
+    "AndroidTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "default": "0.1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "language": {
+          "default": "kotlin",
+          "pattern": "^(kotlin|java)$",
+          "title": "Language",
+          "type": "string"
+        },
+        "ui": {
+          "$ref": "#/$defs/UiToolkit",
+          "default": "compose"
+        },
+        "min_sdk": {
+          "default": 24,
+          "minimum": 21,
+          "title": "Min Sdk",
+          "type": "integer"
+        },
+        "target_sdk": {
+          "default": 35,
+          "minimum": 21,
+          "title": "Target Sdk",
+          "type": "integer"
+        },
+        "package_name": {
+          "title": "Package Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "package_name"
+      ],
+      "title": "AndroidTarget",
+      "type": "object"
+    },
+    "UiToolkit": {
+      "enum": [
+        "compose",
+        "xml"
+      ],
+      "title": "UiToolkit",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Orchestration -> ai-agent. Owners: Person 2 (producer), Person 3 (consumer).",
+  "properties": {
+    "schema_version": {
+      "default": "0.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "agent_task_id": {
+      "title": "Agent Task Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "instructions": {
+      "minLength": 1,
+      "title": "Instructions",
+      "type": "string"
+    },
+    "target": {
+      "$ref": "#/$defs/AndroidTarget"
+    },
+    "context_files": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Context Files",
+      "type": "array"
+    }
+  },
+  "required": [
+    "agent_task_id",
+    "project_id",
+    "instructions",
+    "target"
+  ],
+  "title": "CodingTask",
+  "type": "object"
+}
