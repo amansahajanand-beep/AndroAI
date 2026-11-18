@@ -23,6 +23,7 @@ MAX_TEMPLATE_NESTING = 32
 MAX_BRACKET_ERRORS = 3
 
 _BLANK = re.compile(r"[^\n]")
+_PLAIN_IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
 _CODE_STOP = {
     "kotlin": re.compile(r"[/\"'`{}]"),
     "java": re.compile(r"[/\"'{}]"),
@@ -156,7 +157,12 @@ class _Lexer:
                 if end == -1 or (newline != -1 and newline < end):
                     i += 1  # stray backtick
                 else:
-                    i = end + 1  # Kotlin backtick identifier: may contain spaces and quotes
+                    # Kotlin backtick identifier: may contain spaces, quotes and brackets. A plain
+                    # one (`in`, `value`) is a real name and stays visible; a descriptive test
+                    # name (`detect Composable use`) is text, so its words must not read as code.
+                    if not _PLAIN_IDENTIFIER.fullmatch(src[i + 1 : end]):
+                        self.blank(i + 1, end)
+                    i = end + 1
             elif ch == "{":
                 braces += 1
                 i += 1

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
@@ -14,6 +15,7 @@ from .source import SourceFile, TypeDecl
 from .xmlparse import XmlDoc, XmlNode, parse_xml
 
 COMPONENT_TAGS = ("activity", "activity-alias", "service", "receiver", "provider")
+_XML_PROLOG_AND_COMMENTS = re.compile(r"<\?.*?\?>|<!--.*?-->", re.DOTALL)
 
 
 class SymbolIndex:
@@ -128,6 +130,22 @@ class ProjectAnalysis:
             for path, text in sorted(self.files.texts.items())
             if path.endswith(".xml")
         }
+
+    @cached_property
+    def template_xml(self) -> frozenset[str]:
+        """XML files holding only a prolog and comments (e.g. a license-header template).
+
+        They have no root element on purpose and are not read by Android, so "no element found"
+        is not an error for them. Resource files and manifests are excluded: a rootless file
+        there does break the build.
+        """
+        found = set()
+        for path, doc in self.xml_docs.items():
+            if not doc.error or path.endswith("AndroidManifest.xml") or "/res/" in f"/{path}":
+                continue
+            if not _XML_PROLOG_AND_COMMENTS.sub("", self.files.texts[path]).strip():
+                found.add(path)
+        return frozenset(found)
 
     @cached_property
     def catalog_path(self) -> str | None:
@@ -290,6 +308,11 @@ class ProjectAnalysis:
                         ResolvedDependency(dep, None, None, None, unresolved_alias=True)
                     )
         return resolved
+
+    @cached_property
+    def dependency_groups(self) -> frozenset[str]:
+        """Maven groups of the declared dependencies (e.g. ``androidx.test.uiautomator``)."""
+        return frozenset(d.group for d in self.dependencies if d.group)
 
     @cached_property
     def has_build_scripts(self) -> bool:

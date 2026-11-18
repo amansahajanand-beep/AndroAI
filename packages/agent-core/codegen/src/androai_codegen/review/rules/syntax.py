@@ -79,7 +79,7 @@ def check(a: ProjectAnalysis) -> Iterator[Finding]:
     for path, script in a.gradle_scripts.items():
         yield from _lexical(path, script.lexed, script.bracket_errors)
     for path, doc in a.xml_docs.items():
-        if doc.error:
+        if doc.error and path not in a.template_xml:
             yield finding(
                 Severity.ERROR,
                 "xml.malformed",

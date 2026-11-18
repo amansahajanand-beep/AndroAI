@@ -134,7 +134,11 @@ class ReviewEngine:
 
     @staticmethod
     def _unparsed(analysis: ProjectAnalysis) -> list[str]:
-        bad = [p for p, doc in analysis.xml_docs.items() if doc.error]
+        bad = [
+            p
+            for p, doc in analysis.xml_docs.items()
+            if doc.error and p not in analysis.template_xml
+        ]
         if analysis.catalog and analysis.catalog.error and analysis.catalog_path:
             bad.append(analysis.catalog_path)
         return sorted(bad)

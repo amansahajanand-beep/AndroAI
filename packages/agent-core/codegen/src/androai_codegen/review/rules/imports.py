@@ -351,10 +351,28 @@ def _import_hygiene(a: ProjectAnalysis, path: str, source: SourceFile) -> Iterat
         yield from _unresolved_project_import(a, path, imp)
 
 
+_FRAMEWORK_ROOTS = ("android.", "androidx.", "java.", "javax.", "kotlin.", "kotlinx.")
+
+
+def _may_be_library_package(a: ProjectAnalysis, package: str) -> bool:
+    """A package that a library could also provide, so the project's own files do not own it.
+
+    Projects do add helpers to a library's package (``package androidx.test.uiautomator``), and
+    the library's classes live there too. We cannot see the library, so we cannot call its
+    classes unresolved.
+    """
+    return (
+        package.startswith(_FRAMEWORK_ROOTS)
+        or package in _library_packages()
+        or any(package == g or package.startswith(g + ".") for g in a.dependency_groups)
+    )
+
+
 def _is_generated(fqn: str) -> bool:
     package, _, last = fqn.rpartition(".")
     return (
-        last in _GENERATED_NAMES
+        "R" in package.split(".")  # R.string, R.drawable.logo: members of the generated R class
+        or last in _GENERATED_NAMES
         or last.endswith(_GENERATED_SUFFIXES)
         or last.startswith(_GENERATED_PREFIXES)
         or package.endswith(".databinding")
@@ -376,6 +394,8 @@ def _unresolved_project_import(a: ProjectAnalysis, path: str, imp) -> Iterator[F
     if package in symbols.packages:
         if segments[-1] in symbols.top_names.get(package, set()):
             return
+        if not in_project_namespace and _may_be_library_package(a, package):
+            return  # the project extends a library's package; the library supplies the rest
     elif not in_project_namespace:
         return  # a library, or a package we know nothing about
     yield finding(
