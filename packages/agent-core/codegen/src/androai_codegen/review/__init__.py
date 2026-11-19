@@ -13,6 +13,7 @@ from .models import (
     Severity,
 )
 from .project import ProjectFiles
+from .session import ReviewSession
 
 __all__ = [
     "Finding",
@@ -21,6 +22,7 @@ __all__ = [
     "ReviewConfig",
     "ReviewEngine",
     "ReviewReport",
+    "ReviewSession",
     "ReviewTarget",
     "Severity",
     "review_patch",

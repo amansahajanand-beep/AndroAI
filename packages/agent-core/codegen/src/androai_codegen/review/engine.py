@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from androai_codegen.editing.engine import PatchEngine
 from androai_codegen.editing.models import PatchSet, Simulation
@@ -21,10 +22,61 @@ from .models import (
 from .project import ProjectFiles
 from .rules import RULE_MODULES
 
+if TYPE_CHECKING:
+    from .session import ReviewSession
+
+
+class Baseline:
+    """The analysis and findings of an unchanged project, reusable across several reviews.
+
+    Reviewing a patch needs the project as it was (to tell what the patch introduced) and as it
+    would become. The "was" side does not depend on the patch, so a caller reviewing many patches
+    of one project state can build it once. Everything here is read-only after construction.
+    """
+
+    def __init__(
+        self,
+        engine: ReviewEngine,
+        files: ProjectFiles,
+        target: ReviewTarget | None = None,
+    ) -> None:
+        self.files = files
+        self.config = engine.config
+        self.target = target
+        self.analysis = ProjectAnalysis(files, engine.config, target)
+        self._engine = engine
+        self._fingerprints: set[tuple[str, str, str]] | None = None
+
+    @property
+    def fingerprints(self) -> set[tuple[str, str, str]]:
+        if self._fingerprints is None:
+            self._fingerprints = {f.fingerprint for f in self._engine._run(self.analysis)[0]}
+        return self._fingerprints
+
+    def matches(
+        self, before: ProjectFiles, config: ReviewConfig, target: ReviewTarget | None
+    ) -> bool:
+        """Safe to use for a review of ``before`` under ``config`` and ``target``."""
+        return (
+            self.config == config
+            and self.target == target
+            and (
+                self.files is before
+                or (
+                    self.files.texts == before.texts
+                    and self.files.other_paths == before.other_paths
+                )
+            )
+        )
+
 
 class ReviewEngine:
     def __init__(self, config: ReviewConfig | None = None) -> None:
         self.config = config or ReviewConfig()
+
+    def baseline(self, before: ProjectFiles, *, target: ReviewTarget | None = None) -> Baseline:
+        """Prepare ``before`` once, to pass to :meth:`review` for several patches."""
+        return Baseline(self, before, target)
 
     def review(
         self,
@@ -32,24 +84,28 @@ class ReviewEngine:
         *,
         before: ProjectFiles | None = None,
         target: ReviewTarget | None = None,
+        baseline: Baseline | None = None,
     ) -> ReviewReport:
         """Review ``after``. With ``before``, report only what the change introduced.
 
         Findings that already existed in ``before`` are counted in
         ``preexisting_suppressed`` but not reported: the change is not responsible for them.
+        A ``baseline`` built for the same ``before``, config and target is reused instead of
+        analysing ``before`` again; one that does not match is ignored, never trusted.
         """
         config = self.config
         analysis = ProjectAnalysis(after, config, target)
         findings, crashed = self._run(analysis)
         suppressed = 0
         if before is not None:
-            baseline = ProjectAnalysis(before, config, target)
+            if baseline is None or not baseline.matches(before, config, target):
+                baseline = Baseline(self, before, target)
             if config.only_new:
-                known = {f.fingerprint for f in self._run(baseline)[0]}
+                known = baseline.fingerprints
                 fresh = [f for f in findings if f.fingerprint not in known]
                 suppressed = len(findings) - len(fresh)
                 findings = fresh
-            findings.extend(self._compare(baseline, analysis))
+            findings.extend(self._compare(baseline.analysis, analysis))
 
         findings = [
             self._apply_approvals(f) for f in findings if f.rule not in config.disabled_rules
@@ -166,12 +222,20 @@ def review_patch(
     approved_deletions: Iterable[str] = (),
     config: ReviewConfig | None = None,
     target: ReviewTarget | None = None,
+    session: ReviewSession | None = None,
 ) -> PatchReview:
     """Review a patch *before* applying it: nothing is written.
 
     If the patch itself is invalid (conflict, protected file, ...) there is nothing meaningful
     to review, so ``report`` is ``None`` and the reasons are in ``simulation.preview``.
+
+    Pass a :class:`~.session.ReviewSession` to review many patches of one workspace without
+    reloading and re-analysing the unchanged project each time; the answer is the same. A session
+    for another workspace, project id, config or target is refused with ``ValueError``.
     """
+    if session is not None:
+        session.check_compatible(patch_engine, config, target)
+        return session.review_patch(patch, approved_deletions=approved_deletions)
     simulation = patch_engine.simulate(patch, approved_deletions)
     if not simulation.preview.ok:
         return PatchReview(simulation, None)
