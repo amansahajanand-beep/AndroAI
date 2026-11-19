@@ -8,7 +8,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 1 | File-editing abstraction and patch engine | **Done, hardened (`5aea805`), verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
-| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c (authentication) and 4b-3 (API use, null safety) not started**. |
+| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c done** (authentication: 8 new rule ids, 65 tests, 94 of 94 mutations caught; nothing reported on the five real projects unfaulted, 25 of 33 authentication faults injected into them caught, the other 8 silent because the build is not readable enough). **4b-3 (API use, null safety) not started**. |
 | 5 | New project generation | Not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
@@ -260,8 +260,49 @@ manifest, build and call-site checks that stay silent when they cannot read what
 
 Reuses the existing approval kind `other_high_impact`; no new contract kind is introduced.
 
-**Not implemented yet (4b-2c and 4b-3):** authentication (recognised sign-in integrations, redirect configuration,
-hardcoded secrets, plain-text token storage), incorrect API use and null safety.
+### Phase 4b-2c: authentication
+
+Deliberately conservative: the rules cover recognised sign-in libraries, OAuth redirect configuration, hardcoded
+secrets and private keys, signing passwords and credentials in preferences. **They do not verify an app's
+authorization model**, whether the server checks tokens, or whether sign-in is correct. The documented behaviour was
+checked before any rule was written: the Credential Manager setup and failure documentation, the AppAuth-Android
+README, the Firebase Authentication setup page, the Android security tips, the app-signing guide and the Jetpack
+Security release notes. Two findings of that check shaped the rules: the security tips call app-private internal storage
+"sufficient for most applications", so a token in `SharedPreferences` is an advisory, not a vulnerability; and
+`androidx.security:security-crypto` (`EncryptedSharedPreferences`) has deprecated all its APIs "in favour of existing
+platform APIs and direct use of Android Keystore", so no rule recommends it.
+
+Recognised integrations (`AUTH_INTEGRATIONS`): Firebase Authentication, FirebaseUI Auth, Credential Manager, Sign in
+with Google (`googleid`), legacy Google Sign-In (Play services), AppAuth and Auth0, each with the packages that mean
+"this code signs users in with it" and the artifacts that provide them.
+
+| Rule id | Severity | Reports | Documented basis |
+|---|---|---|---|
+| `change.auth_dependency_removed_still_used` | error, no approval | a recognised sign-in library the project declared before and declares nowhere now (any module, any version, or a known library that depends on it), while a non-test source still imports its package. Silent if any dependency of the new project cannot be resolved. Granting the removal (`change.integration_removed`) does not clear it: it is the fact that the code no longer builds | `firebase-auth`, `androidx.credentials:credentials` and `net.openid:appauth` coordinates from their setup pages |
+| `auth.credential_manager_provider_missing` | warning | the project declares `androidx.credentials:credentials` and imports Credential Manager but declares `credentials-play-services-auth` in no module (judged project-wide, and only when every module's dependencies are readable) | the setup lists both artifacts; the documented failure for a missing second one is a `*ProviderConfigurationException`: "Your app is missing the provider configuration dependency. Most likely, you're missing the credentials-play-services-auth module" |
+| `auth.appauth_redirect_not_configured` | warning | an application module whose dependencies include AppAuth, with no `appAuthRedirectScheme` anywhere in its build scripts and no manifest declaring `net.openid.appauth.RedirectUriReceiverActivity` | the README captures redirects "through a manifest placeholder" (`appAuthRedirectScheme`) or by replacing `RedirectUriReceiverActivity` with an intent filter (`tools:node="replace"`). The README does not say what happens when neither is done, so the finding says the scheme "is not configured", not that the build fails |
+| `auth.appauth_redirect_scheme_unmatched` | warning | a literal redirect URI (`AuthorizationRequest.Builder(..., Uri.parse("scheme:/..."))`, `.toUri()`, `setRedirectUri`) whose scheme no manifest `<data android:scheme>` and no `appAuthRedirectScheme` value matches (case ignored) | the README's custom-scheme intent filter for the redirect activity |
+| `auth.private_key_in_source` | error | a PEM `PRIVATE KEY` block with a real body (an `-----END` marker and at least 60 base64 characters, string concatenation and `\n` escapes allowed) in a Kotlin, Java, XML, Gradle or TOML file outside test source sets | "Never commit API keys to your source code repository"; the app-signing guide: the signing key "must be kept secret" |
+| `auth.hardcoded_secret` | warning | a token with a distinctive format (AWS access key id, GitHub, Slack, Stripe live, Google OAuth client secret, `sk-`), or a literal of 16+ characters assigned to a `client_secret` / `api_secret` / `app_secret` / `secret_key`-style name in Kotlin, Java, an XML `<string>`, or a Gradle `buildConfigField`, with letters and digits, enough entropy and no placeholder words | the security tips: an attacker "can decompile the app and find these resources". Google API keys (`AIza...`) and JWTs are deliberately not reported |
+| `auth.signing_password_in_build_script` | warning | `storePassword` / `keyPassword` given as a literal in a Gradle script (the debug keystore's `android` excluded) | the signing guide: "When you create a signing configuration, your signing information is included in plain text in your Gradle build files ... you should keep your signing information secure by removing it from the build files" |
+| `auth.credential_in_plain_preferences` | warning | `putString("<key>", ...)` on a `SharedPreferences` editor for an explicit credential key (`access_token`, `refresh_token`, `id_token`, `auth_token`, `session_token`, `bearer_token`, `oauth_token`, `jwt`, `password`, `passwd`) in a file that uses no encrypted or Keystore-backed storage | for a password: "don't store passwords on the device". For a token: the security tips suggest the Keystore for credentials only your app uses; worded as an advisory |
+
+**How a finding is judged.**
+
+- *No finding repeats a secret.* A finding carries the kind of secret, the identifier it was assigned to and its length;
+  a test checks that no secret, token or key body appears anywhere in a finding.
+- *Unreadable means silent.* The dependency rules need every module (or the application module and everything it
+  depends on) to be readable: no convention plugin, no `allprojects` / `subprojects` dependencies, no unresolved alias,
+  no partly written coordinate. A redirect URI held in a constant or template, a computed
+  `appAuthRedirectScheme`, a manifest scheme that is another placeholder, a project with no manifest: none is judged.
+- *Preferences need the editor.* A credential key is only reported when the write is made on `edit()`, inside an
+  `edit { }` block or on something typed as an `Editor` (so `outState.putString("password", ...)` on a `Bundle` is not),
+  in a file that mentions `SharedPreferences` and nothing encrypted (`EncryptedSharedPreferences`, `MasterKey`,
+  `KeyStore`, `Cipher`, `Aead`, `Tink`, `encrypt`).
+- *Keys survive edits.* Call-site findings are keyed by their name or scheme plus an ordinal among identical ones.
+- No new approval kind: nothing here is approvable, and `other_high_impact` is not used.
+
+**Not implemented yet (4b-3):** incorrect API use and null safety.
 
 ## Generation workflow, supported technologies, repair rules
 
@@ -272,12 +313,13 @@ The patch engine is language-agnostic: it edits UTF-8 text files and knows nothi
 
 ## Verification
 
-Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening, the real-project fixes, 4b-1, 4b-2a and 4b-2b).
+Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening, the real-project fixes, 4b-1, 4b-2a, 4b-2b and 4b-2c).
 
 | Platform | Commit | `pytest packages/agent-core/codegen` | Ruff |
 |---|---|---|---|
-| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4b-2b (the commit that added this row) | **778 passed, 5 skipped, 1 xfailed** (about 2.4 min) | `ruff check` clean; `ruff format --check` clean (74 files); `compileall` clean |
-| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4b-2b | **782 passed, 1 skipped, 1 xfailed** (about 32 s) | `ruff check` clean; `ruff format --check` clean (Linux ruff counted 75 files; both trees hold the same 74 `.py` files); `compileall` clean |
+| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4b-2c (the commit that added this row) | **843 passed, 5 skipped, 1 xfailed** (about 2.4 min) | `ruff check` clean; `ruff format --check` clean (77 files); `compileall` clean |
+| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4b-2c | **847 passed, 1 skipped, 1 xfailed** (about 46 s) | `ruff check` clean; `ruff format --check` clean (Linux ruff counted 78 files; both trees hold the same 77 `.py` files); `compileall` clean |
+| Windows / Linux | `69254e1` (Phase 4b-2b) | 778 passed, 5 skipped, 1 xfailed / 782 passed, 1 skipped, 1 xfailed | clean (74 files) |
 | Windows / Linux | `65e9d50` (Phase 4b-2a) | 682 passed, 5 skipped, 1 xfailed / 686 passed, 1 skipped, 1 xfailed | clean (72 files) |
 | Windows / Linux | `912727b` (Phase 4a.7) | 623 passed, 5 skipped, 1 xfailed / 627 passed, 1 skipped, 1 xfailed | clean (67 files) |
 | Windows / Linux | `b12e5b8` (Phase 4a.6) | 594 passed, 5 skipped, 1 xfailed / 598 passed, 1 skipped, 1 xfailed | clean (66 files) |
@@ -623,6 +665,44 @@ mutations are caught, and the original 22 4a mutations still are.
   project-wide on purpose). `nowinandroid` has no readable application module (convention plugins), so none of the new
   faults could be injected there. The other 6 silent faults of the 88 are the ones from 4b-1.
 
+### Phase 4b-2c verification
+
+- **65 new tests** (`tests/test_review_auth.py`): every rule has a positive case and the twins that must stay quiet
+  (the compliant form, the unreadable form, the premise that does not hold, test source sets, each documented
+  exemption). The known-good sample project still reports nothing, helpers assert no `review.internal_error`, and one
+  test checks that no finding contains a secret, a token or a key body.
+- **Mutation check: 94 of 94 caught** for the 4b-2c code (facts, rules, the change rule and the new
+  dependency-coordinates method), and the earlier suites still pass after this slice's changes to `analysis.py` and
+  `changes.py`: 114 of 114 (4a.6 to 4b-2a), 22 of 22 (4a) and 143 of 143 (4b-2b). The first run caught 89 of 94
+  although all 61 tests passed. Of the five survivors,
+  two were code (a length guard that duplicated the pattern's own `{16,}` quantifier, an equivalent mutant, removed; a
+  one-finding-per-line guard that hid a second token on the same line, removed) and three were missing tests (an
+  unreadable module outside the application's closure, a manifest placeholder whose Gradle value does not match, a
+  placeholder written with `put(...)`). Two tests written for those survivors **failed** and exposed a real defect:
+  the "computed placeholder" pattern ended in `\s*` followed by a negative lookahead, so the regex engine
+  backtracked the whitespace away and every literal `appAuthRedirectScheme = "value"` was treated as computed. The
+  redirect rule was therefore silent for any placeholder written with a space, and no earlier test noticed because
+  they all asserted silence. A possessive quantifier fixes it and a mutation now covers it.
+- **Real projects, no faults (5): no authentication finding.** The only security-group finding is still the
+  unconfirmed `AntennaPod` `READ_EXTERNAL_STORAGE` one. The real code exercised the guards: `iosched`'s
+  `keyPassword = "android"` is the debug keystore (silent by design), `AntennaPod`'s signing passwords come from
+  `project.getProperties().getOrDefault(...)` (an expression, not a literal), and its one credential-like
+  `putString("password", ...)` is `outState.putString` on a `Bundle` (not a preferences editor), which is why the
+  rule requires the editor context.
+- **Real projects, faults injected in memory (121 faults over the five projects, 33 of them new): 96 caught, 25
+  silent.** The 33 new authentication-scope faults: 25 caught, 8 silent. Caught on every project that has an
+  application module: a private key, a hardcoded client secret, a GitHub token, a literal signing password, a
+  refresh token in plain `SharedPreferences`, an AppAuth redirect no filter receives, and (`iosched`) removing the
+  FirebaseUI Auth dependency while the code still imports Firebase Auth classes (both `change.integration_removed`
+  and the new rule fire). The 8 silent ones are AppAuth-without-a-redirect-scheme
+  and Credential-Manager-without-its-provider on four projects, all explained by the readability gates that were
+  checked rather than assumed: `iosched` and `sunflower` declare dependencies in `allprojects` / `subprojects`,
+  `platform-samples`' and `AntennaPod`'s `app` modules depend on modules that cannot be read, and Credential Manager
+  is judged project-wide. `AntennaPod`'s `app-wearos` module *is* readable, and injecting AppAuth there is caught
+  (`auth.appauth_redirect_not_configured`) and goes quiet once the placeholder is added: the only real-project
+  evidence for that rule. `nowinandroid` has no readable application module (convention plugins), so none of the new
+  faults could be injected there.
+
 ### Platform coverage (Windows and Linux together)
 
 Some tests can only run on one operating system, so each platform skips some. Together they cover all 415 tests:
@@ -722,12 +802,12 @@ Phase 4 (code review):
 - Multi-module projects are treated as one: resources and dependencies are looked up project-wide (permissive).
 - Resource types a library may legitimately provide (`style`, and names with library prefixes) are skipped, so
   a typo in such a name is not caught.
-- **Nine rule groups run** (`syntax`, `imports`, `resources`, `gradle`, `manifest`, `navigation`, `deeplinks`,
-  `security` and, with a "before" state, `changes`; 61 rule ids). Nothing checks authentication, incorrect API use or
-  null safety yet (4b-2c and 4b-3), and there is no language or framework detector. The security group is the
-  narrow set listed under Phase 4b-2b, not a security audit.
-- A review report with no findings therefore says nothing about authentication or API use, and little about
-  security. It must not be presented as "the project is safe".
+- **Ten rule groups run** (`syntax`, `imports`, `resources`, `gradle`, `manifest`, `navigation`, `deeplinks`,
+  `security`, `auth` and, with a "before" state, `changes`; 69 rule ids). Nothing checks incorrect API use or null
+  safety yet (4b-3), and there is no language or framework detector. The security and authentication groups are the
+  narrow sets listed under Phases 4b-2b and 4b-2c, not an audit.
+- A review report with no findings therefore says nothing about API use, little about security and authentication,
+  and nothing about whether an app's authorization model is sound. It must not be presented as "the project is safe".
 
 Phase 4b-1 (manifest, build and change-aware rules):
 
@@ -819,6 +899,42 @@ Phase 4b-2b (security):
   granted it. `QUERY_ALL_PACKAGES` (documented as a `normal` permission) is not in the table.
 - Nothing in 4b-2b was compiled or run on a device. Behaviour rests on the documentation and on tests.
 
+Phase 4b-2c (authentication):
+
+- **Authentication correctness is not checked.** The rules never ask whether tokens are validated, whether a screen is
+  guarded, or whether sign-in works; they cover configuration, secrets and storage only.
+- **The dependency rules are silent on most real projects.** `auth.credential_manager_provider_missing` needs every
+  module of the build readable, and `auth.appauth_redirect_not_configured` needs the application module and
+  everything it depends on readable. Of the five real projects only one application module (`AntennaPod`'s
+  `app-wearos`) qualifies: `iosched` and `sunflower` declare dependencies in `allprojects` / `subprojects`,
+  `platform-samples`' and `AntennaPod`'s `app` depend on modules that use constants or shared scripts, and
+  `nowinandroid` uses convention plugins. Readable single-module projects (what generation produces) get the rules.
+- **The provider coordinates were only partly checked against documentation.** `firebase-auth`,
+  `androidx.credentials:credentials` (+ `credentials-play-services-auth`) and `net.openid:appauth` come from their
+  setup pages. The coordinates for FirebaseUI, legacy Google Sign-In, `googleid` and Auth0 were not fetched, so a
+  library that bundles one of them under another coordinate is invisible to `change.auth_dependency_removed_still_used`
+  (it errs towards silence: a coordinate that starts with a listed prefix counts as providing the classes, so a
+  removal replaced by a lookalike is also silent). Imports count as "call sites": an unused import is a use.
+- **Only some files are read.** The review loader reads `.kt`, `.kts`, `.java`, `.xml`, `.gradle`, `.toml` and
+  `.proto`; a private key or secret in a `.pem`, `.json`, `.properties`, `.txt` or `.md` file (including
+  `google-services.json` and `keystore.properties`) is never seen, and a keystore is binary. Secrets in comments are
+  reported; secrets in test source sets are not.
+- **Secret detection is a heuristic for a few shapes.** Distinctive token formats and `*secret*`-named literals only.
+  A password assigned to a variable called `password`, an API key named `apiKey`, a bearer token in a header
+  constant, a secret split across two literals or assembled at run time are not found. `AIza...` keys and JWTs are
+  skipped by choice (Firebase and Maps keys ship inside apps, example JWTs are common), although the security tips say
+  "never commit API keys"; that choice was made for noise, not verified against Firebase documentation. A secret that
+  happens to contain `test`, `sample` and similar words is treated as a placeholder.
+- **Preference storage is an advisory about explicit keys.** Only the ten key names listed, written as string literals
+  through an editor in a file without encrypted storage; `DataStore`, `putString(KEY_CONSTANT, ...)`, a token under
+  the key `token`, and `Bundle`/`Intent` extras are not judged. Any mention of `KeyStore`, `Cipher` or `encrypt`
+  anywhere in the file silences it, even for an unrelated value.
+- **Redirect checks need literals.** `auth.appauth_redirect_scheme_unmatched` reads `Uri.parse("scheme:/path")` and
+  `"scheme:/path".toUri()` as the fourth argument of `AuthorizationRequest.Builder` or as the argument of
+  `setRedirectUri`; an `https` App Link redirect is compared on its scheme only (its host, path and Digital Asset
+  Links are not checked), and scheme case is ignored although Android may not treat schemes case-insensitively.
+- Nothing in 4b-2c was compiled or run on a device.
+
 - **No known false positive of the 4a rules remains on the five validation projects** (Phases 4a.6 and 4a.7
   fixed the last four). Two limits stay by design:
   - `items(total) { ... }` in a lazy list is judged as the extension that needs its import, because `total` may be
@@ -833,7 +949,7 @@ Phase 4b-2b (security):
 
 Not done:
 
-- **Phase 4b-2c and 4b-3** (authentication, API-use and null-safety rules).
+- **Phase 4b-3** (API-use and null-safety rules).
 - **More real-project validation** (see Phase 4 limitations): five projects have been reviewed in total, and the
   older rules still showed false positives on two of the newer ones; more are needed before any finding is
   allowed to block a patch in production.

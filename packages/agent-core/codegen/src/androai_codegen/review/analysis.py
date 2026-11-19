@@ -562,8 +562,45 @@ class ProjectAnalysis:
             memo[module] = self._dependency_groups(module)
         return memo[module]
 
+    def dependency_coordinates_for(self, module: str | None) -> frozenset[str] | None:
+        """``group:artifact`` of every library ``module`` and the modules it depends on declare,
+        or ``None`` when that list cannot be trusted to be complete (the same conditions as
+        :meth:`dependency_groups_for`, and additionally a coordinate that is not fully written)."""
+        if module is None or self.shared_dependency_scope or not self.has_build_scripts:
+            return None
+        memo: dict[str, frozenset[str] | None] = self.__dict__.setdefault("_coordinates_memo", {})
+        if module not in memo:
+            memo[module] = self._dependency_coordinates(module)
+        return memo[module]
+
+    def _dependency_coordinates(self, module: str) -> frozenset[str] | None:
+        closure = self._dependency_closure(module)
+        if closure is None:
+            return None
+        found: set[str] = set()
+        for resolved in closure:
+            group, artifact = resolved.group, resolved.artifact
+            if group is None or artifact is None or "$" in group or "$" in artifact:
+                return None
+            found.add(f"{group}:{artifact}")
+        return frozenset(found)
+
     def _dependency_groups(self, module: str) -> frozenset[str] | None:
-        pending, seen, groups = [module], set(), set()
+        closure = self._dependency_closure(module)
+        if closure is None:
+            return None
+        groups: set[str] = set()
+        for resolved in closure:
+            if resolved.group is None or "$" in resolved.group:
+                return None
+            groups.add(resolved.group)
+        return frozenset(groups)
+
+    def _dependency_closure(self, module: str) -> list[ResolvedDependency] | None:
+        """The declared libraries of ``module`` and of the modules it depends on, or ``None`` when
+        the build is not readable enough to say (no script, an unparsed dependency call, a
+        convention plugin, a project reference that points nowhere)."""
+        pending, seen, found = [module], set(), []
         while pending:
             current = pending.pop()
             if current in seen:
@@ -579,13 +616,11 @@ class ProjectAnalysis:
                 dep = resolved.dep
                 if dep.path not in paths or dep.project or dep.project_accessor:
                     continue
-                if resolved.group is None or "$" in resolved.group:
-                    return None
-                groups.add(resolved.group)
+                found.append(resolved)
             if any(d.source == current and d.target is None for d in self.project_dependencies):
                 return None
             pending.extend(self.module_graph.get(current, ()))
-        return frozenset(groups)
+        return found
 
     @cached_property
     def kotlin_version(self) -> tuple[int, ...] | None:
@@ -625,6 +660,14 @@ class ProjectAnalysis:
         from .securityfacts import SecurityFacts  # imported lazily: it needs this module
 
         return SecurityFacts.build(self)
+
+    @cached_property
+    def auth(self):
+        """Hardcoded secrets, signing passwords, preference writes and OAuth redirect URIs (see
+        ``authfacts.py``)."""
+        from .authfacts import AuthFacts  # imported lazily: it needs this module
+
+        return AuthFacts.build(self)
 
     @cached_property
     def component_classes(self) -> dict[str, tuple[str, str, int]]:

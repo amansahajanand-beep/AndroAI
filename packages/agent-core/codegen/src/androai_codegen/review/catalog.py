@@ -650,6 +650,44 @@ SPECIAL_ACCESS_PERMISSIONS = frozenset(
     PACKAGE_USAGE_STATS""".split()
 )
 
+
+@dataclass(frozen=True)
+class AuthIntegration:
+    """A sign-in library the review recognises: the packages whose classes mean "this code signs
+    users in with it", and the ``group:artifact`` prefixes that put those classes on the classpath
+    (the library itself, or one known to depend on it)."""
+
+    name: str
+    imports: tuple[str, ...]
+    providers: tuple[str, ...]
+
+
+AUTH_INTEGRATIONS: tuple[AuthIntegration, ...] = (
+    AuthIntegration(
+        "Firebase Authentication",
+        ("com.google.firebase.auth.",),
+        ("com.google.firebase:firebase-auth", "com.firebaseui:firebase-ui-auth"),
+    ),
+    AuthIntegration(
+        "FirebaseUI Auth", ("com.firebase.ui.auth.",), ("com.firebaseui:firebase-ui-auth",)
+    ),
+    AuthIntegration(
+        "Credential Manager", ("androidx.credentials.",), ("androidx.credentials:credentials",)
+    ),
+    AuthIntegration(
+        "Sign in with Google (googleid)",
+        ("com.google.android.libraries.identity.googleid.",),
+        ("com.google.android.libraries.identity.googleid:googleid",),
+    ),
+    AuthIntegration(
+        "Google Sign-In (Play services)",
+        ("com.google.android.gms.auth.api.signin.",),
+        ("com.google.android.gms:play-services-auth",),
+    ),
+    AuthIntegration("AppAuth", ("net.openid.appauth.",), ("net.openid:appauth",)),
+    AuthIntegration("Auth0", ("com.auth0.android.",), ("com.auth0.android:auth0",)),
+)
+
 # Resource-name prefixes of library-provided resources: never reported as "unresolved".
 LIBRARY_RESOURCE_PREFIXES = (
     "abc_",

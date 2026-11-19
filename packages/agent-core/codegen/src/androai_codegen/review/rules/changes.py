@@ -12,8 +12,14 @@ from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from ..analysis import ManifestInfo, ProjectAnalysis
-from ..catalog import DANGEROUS_PERMISSIONS, SENSITIVE_DEPENDENCY_GROUPS, SPECIAL_ACCESS_PERMISSIONS
+from ..analysis import _BUILD_SOURCE, ManifestInfo, ProjectAnalysis
+from ..catalog import (
+    AUTH_INTEGRATIONS,
+    DANGEROUS_PERMISSIONS,
+    SENSITIVE_DEPENDENCY_GROUPS,
+    SPECIAL_ACCESS_PERMISSIONS,
+    AuthIntegration,
+)
 from ..models import Finding, Severity, finding
 from .manifest import _fqn, _nodes, _removed
 
@@ -33,6 +39,7 @@ def compare(before: ProjectAnalysis, after: ProjectAnalysis) -> Iterator[Finding
     yield from _sdk(before, after)
     yield from _exposure(before, after)
     yield from _sensitive_permission_added(before, after)
+    yield from _auth_dependency_removed_still_used(before, after)
 
 
 def _changed(
@@ -198,6 +205,54 @@ def _sensitive_permission_added(
             key=name,
             approval="other_high_impact",
         )
+
+
+def _provides(coordinate: str, integration: AuthIntegration) -> bool:
+    return any(coordinate.startswith(prefix) for prefix in integration.providers)
+
+
+def _auth_dependency_removed_still_used(
+    before: ProjectAnalysis, after: ProjectAnalysis
+) -> Iterator[Finding]:
+    """A sign-in library the project declared before and no longer declares anywhere, while code
+    still imports its classes: the build cannot resolve them. Judged across the whole project (a
+    dependency still declared in another module is not removed) and silent if any dependency of
+    the new project could not be resolved, since that one may provide the library.
+
+    Removing the integration needs approval (``change.integration_removed``); this finding is the
+    separate fact that the removal broke the code, so granting the approval does not clear it.
+    """
+    if any(r.unresolved_alias for r in after.dependencies):
+        return
+    old = {r.coordinate for r in before.dependencies if r.coordinate and not r.dep.project}
+    new = {r.coordinate for r in after.dependencies if r.coordinate and not r.dep.project}
+    for integration in AUTH_INTEGRATIONS:
+        if not any(_provides(c, integration) for c in old):
+            continue
+        if any(_provides(c, integration) for c in new):
+            continue
+        for path, source in after.sources.items():
+            if _BUILD_SOURCE.search(path) or after.is_test_source(path):
+                continue
+            use = next(
+                (i for i in source.imports if f"{i.fqn}.".startswith(integration.imports)), None
+            )
+            if use is None:
+                continue
+            yield finding(
+                Severity.ERROR,
+                "change.auth_dependency_removed_still_used",
+                "changes",
+                path,
+                f"The change removes the dependency that provides {integration.name}, but this "
+                f"file still imports {use.fqn}: the build can no longer resolve it, and the "
+                "sign-in code that uses it stops working.",
+                line=use.line,
+                fix=f"Keep the {integration.name} dependency, or remove the sign-in code that "
+                "uses it as part of the same approved change.",
+                key=integration.name,
+            )
+            break
 
 
 def _exposure(before: ProjectAnalysis, after: ProjectAnalysis) -> Iterator[Finding]:
