@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from functools import cached_property
 
 from .catalog import COMPONENT_BASES, KNOWN_PLUGIN_PREFIXES, TEST_SOURCE_SETS
-from .gradle import Dependency, GradleScript, VersionCatalog, parse_catalog
+from .gradle import Dependency, GradleScript, VersionCatalog, _accessor, parse_catalog
 from .models import ReviewConfig, ReviewTarget
 from .project import ProjectFiles
 from .proto import generated_classes
@@ -22,6 +22,21 @@ _BUILD_SOURCE = re.compile(r"(?:^|/)(?:buildSrc|build-logic)/")
 _OBJECT = re.compile(r"\bobject[ \t]+([A-Za-z_]\w*)[ \t]*\{")
 _CONST = re.compile(
     r'\bconst[ \t]+val[ \t]+([A-Za-z_]\w*)[ \t]*(?::[ \t]*String[ \t]*)?=[ \t]*"([^"\n]*)"'
+)
+# ``const val TARGET_SDK = 34`` (or a ``val`` inside an ``object``): a whole number, nothing else
+_INT_CONST = re.compile(
+    r"\b(?P<const>const[ \t]+)?val[ \t]+(?P<name>[A-Za-z_]\w*)[ \t]*(?::[ \t]*Int[ \t]*)?"
+    r"=[ \t]*(?P<value>\d+)[ \t]*(?:;|$)",
+    re.MULTILINE,
+)
+# ``targetSdk = <expression>`` / ``targetSdkVersion <expression>``: the rest of the line
+_TARGET_SDK_EXPRESSION = re.compile(r"\btargetSdk(?:Version)?\b[ \t]*=?[ \t]*([^\n;]+)")
+_CATALOG_VERSION = r"libs\.versions\.([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.get\(\)"
+# the only two shapes of a catalog version used as a number that are read: ``.get().toInt()`` /
+# ``.get().toInteger()`` and ``Integer.parseInt(...get())`` / ``Integer.valueOf(...get())``
+_SDK_AS_NUMBER = re.compile(rf"{_CATALOG_VERSION}\.(?:toInt|toInteger)\(\)")
+_SDK_PARSED = re.compile(
+    rf"(?:java\.lang\.)?Integer\.(?:parseInt|valueOf)\([ \t]*{_CATALOG_VERSION}[ \t]*\)"
 )
 
 
@@ -397,6 +412,84 @@ class ProjectAnalysis:
                 version = parts[2] if len(parts) > 2 and parts[2] else None
                 found[".".join([*chain, match.group(1)])] = (parts[0], parts[1], version)
         return found
+
+    # -- target SDK ---------------------------------------------------------------------
+
+    @cached_property
+    def catalog_version_numbers(self) -> dict[str, int]:
+        """``[versions]`` entries of the version catalog that are plain whole numbers, by the
+        accessor Gradle generates for them (``target-sdk`` and ``target_sdk`` both become
+        ``target.sdk``). Empty when the catalog is missing, broken (it then has no versions),
+        ambiguous (more than one ``libs.versions.toml``) or not the only catalog; an accessor two
+        keys share is dropped."""
+        catalog = self.catalog
+        if (
+            catalog is None
+            or self.custom_catalogs
+            or sum(1 for p in self.files.texts if p.endswith("libs.versions.toml")) > 1
+        ):
+            return {}
+        by_accessor: dict[str, list[str]] = defaultdict(list)
+        for key, value in catalog.version_values.items():
+            by_accessor[_accessor(key)].append(value)
+        return {
+            accessor: int(values[0])
+            for accessor, values in by_accessor.items()
+            if len(values) == 1 and values[0].isascii() and values[0].isdigit()
+        }
+
+    @cached_property
+    def build_numeric_constants(self) -> dict[str, int]:
+        """``Versions.TARGET_SDK`` -> 34 from ``const val`` (or ``val`` inside an ``object``)
+        declarations of a whole number in ``buildSrc`` / ``build-logic`` Kotlin files. Nested
+        objects give dotted names; a name declared twice with different values is dropped."""
+        found: dict[str, int] = {}
+        clashing: set[str] = set()
+        for path, source in self.sources.items():
+            if not _BUILD_SOURCE.search(path) or not path.endswith(".kt"):
+                continue
+            masked = source.masked
+            objects = [
+                (m.start(), matching_close(masked, m.end() - 1), m.group(1))
+                for m in _OBJECT.finditer(masked)
+            ]
+            for match in _INT_CONST.finditer(masked):
+                chain = [
+                    name
+                    for start, end, name in objects
+                    if end is not None and start < match.start() < end
+                ]
+                if not match.group("const") and not chain:
+                    continue  # a plain ``val`` outside an object is not a shared constant
+                key = ".".join([*chain, match.group("name")])
+                value = int(match.group("value"))
+                if found.setdefault(key, value) != value:
+                    clashing.add(key)
+        return {k: v for k, v in found.items() if k not in clashing}
+
+    def target_sdk_of(self, script: GradleScript) -> tuple[int, int] | None:
+        """``(targetSdk, line)`` of a build script, or ``None`` if it cannot be known.
+
+        A number written directly is read as before. Otherwise the first ``targetSdk`` whose
+        expression is exactly a catalog version (``libs.versions.targetSdk.get().toInt()``) or a
+        ``buildSrc`` constant (``Versions.TARGET_SDK``) that resolves to a whole number. Anything
+        else (arithmetic, ``rootProject.ext``, a property, a function call, a convention plugin) is
+        unknown: nothing is evaluated and nothing is guessed."""
+        direct = script.target_sdk
+        if direct is not None:
+            return direct
+        for match in _TARGET_SDK_EXPRESSION.finditer(script.masked):
+            value = self._sdk_expression(match.group(1).strip())
+            if value is not None:
+                return value, script.line(match.start())
+        return None
+
+    def _sdk_expression(self, expression: str) -> int | None:
+        for pattern in (_SDK_AS_NUMBER, _SDK_PARSED):
+            found = pattern.fullmatch(expression)
+            if found:
+                return self.catalog_version_numbers.get(found.group(1))
+        return self.build_numeric_constants.get(expression)  # only an exact constant name matches
 
     @cached_property
     def dependencies(self) -> list[ResolvedDependency]:

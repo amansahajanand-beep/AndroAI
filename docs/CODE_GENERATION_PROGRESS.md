@@ -8,7 +8,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 1 | File-editing abstraction and patch engine | **Done, hardened (`5aea805`), verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
-| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c done** (authentication: 8 new rule ids, 65 tests, 94 of 94 mutations caught; nothing reported on the five real projects unfaulted, 25 of 33 authentication faults injected into them caught, the other 8 silent because the build is not readable enough). **4b-3 (API use, null safety) not started**. |
+| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c done** (authentication: 8 new rule ids, 65 tests, 94 of 94 mutations caught; nothing reported on the five real projects unfaulted, 25 of 33 authentication faults injected into them caught, the other 8 silent because the build is not readable enough). **Target SDK resolution done** (a follow-up: `targetSdk` is now also read from a version-catalog entry or a `buildSrc` constant, so the rules that depend on it engage on `iosched` and `sunflower`; 121 tests, 27 of 27 mutations caught, no new finding on the five real projects, 101 of 121 injected faults caught, up from 96). **4b-3 (API use, null safety) not started**. |
 | 5 | New project generation | Not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
@@ -238,10 +238,11 @@ manifest, build and call-site checks that stay silent when they cannot read what
 
 **How a finding is judged.**
 
-- *Premises are checked, not assumed.* The `PendingIntent`, receiver and URL rules need the app's target SDK as a
-  literal (a library module is judged by the lowest target of the applications of the build; an unreadable one makes
-  it silent), and the URL rule additionally needs every shipping manifest parsed, no `usesCleartextTraffic` other than
-  `false`, and any network security config readable and not permitting cleartext at all (even for localhost).
+- *Premises are checked, not assumed.* The `PendingIntent`, receiver and URL rules need the app's target SDK, written
+  as a number or resolved as described under "Target SDK resolution" (a library module is judged by the lowest target
+  of the applications of the build; an unreadable one makes it silent), and the URL rule additionally needs every
+  shipping manifest parsed, no `usesCleartextTraffic` other than `false`, and any network security config readable and
+  not permitting cleartext at all (even for localhost).
 - *Unreadable means silent.* Flags held in a variable or computed, an intent built elsewhere (or with `setPackage`),
   a filter held in a field, an `addAction` with a constant of our own, a template URL, `LocalBroadcastManager` (no
   export flag exists for it), a `registerReceiver` of a shape the platform does not have: none is judged. Comments
@@ -302,6 +303,33 @@ with Google (`googleid`), legacy Google Sign-In (Play services), AppAuth and Aut
 - *Keys survive edits.* Call-site findings are keyed by their name or scheme plus an ordinal among identical ones.
 - No new approval kind: nothing here is approvable, and `other_high_impact` is not used.
 
+### Target SDK resolution (Phase 4b follow-up)
+
+Several rules depend on the app's `targetSdk`: `security.pending_intent_mutability` (31+),
+`security.pending_intent_mutable_implicit` and `security.receiver_export_flag_missing` (34+),
+`security.cleartext_url_blocked` and the platform-default note of `security.cleartext_enabled` (28+),
+`security.permission_never_requested` (23+) and `manifest.exported_missing` (31+). The review used to read only a
+number written directly after `targetSdk` / `targetSdkVersion`, so on most real projects they were silent.
+`ProjectAnalysis.target_sdk_of(script)` now returns `(value, line)` for a script, and every one of those rules goes
+through it. It is **not a Gradle evaluator**: nothing is run, no expression is computed, and the only forms read are
+
+| Form | Example | Source |
+|---|---|---|
+| a number written directly (unchanged) | `targetSdk = 35`, `targetSdkVersion 33` | the script |
+| a version-catalog entry converted to a number | `libs.versions.targetSdk.get().toInt()`, `.get().toInteger()`, `Integer.parseInt(libs.versions.targetSdk.get())` / `Integer.valueOf(...)` | the single `libs.versions.toml`; `target-sdk`, `target_sdk` and `target.sdk` keys are reached as `libs.versions.target.sdk` |
+| a whole-number constant of `buildSrc` / `build-logic` | `Versions.TARGET_SDK`, `Config.Sdk.TARGET`, a top-level `TARGET_SDK` | a Kotlin `const val` (or a `val` inside an `object`) assigned a bare whole number |
+
+Everything else is unknown, and an unknown target means the rule stays silent: arithmetic (`... + 1`), a catalog
+version used as a string, a version table (`{ require = "34" }`), a non-numeric or non-ASCII version, an alias or
+constant that does not exist, a constant assigned an expression or a string, a `val` outside an object, a constant
+in a comment or outside `buildSrc` / `build-logic`, a constant declared twice with different values, two catalog keys
+with the same accessor, a catalog that is missing, broken, not the only `libs.versions.toml` or accompanied by a
+custom catalog, `rootProject.ext`, Gradle properties, conditionals, shared scripts (`apply from:`) and convention
+plugins. A number written directly still wins; otherwise the first `targetSdk` expression that resolves is used.
+`gradle.sdk_order` and `change.sdk_changed` compare several SDK levels and were deliberately **not** changed: they
+still read only numbers written out, so a target that lives in the catalog is not compared there. Authentication rules
+do not depend on the target SDK; only `security.permission_never_requested` (above) does.
+
 **Not implemented yet (4b-3):** incorrect API use and null safety.
 
 ## Generation workflow, supported technologies, repair rules
@@ -313,12 +341,13 @@ The patch engine is language-agnostic: it edits UTF-8 text files and knows nothi
 
 ## Verification
 
-Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening, the real-project fixes, 4b-1, 4b-2a, 4b-2b and 4b-2c).
+Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening, the real-project fixes, 4b-1, 4b-2a, 4b-2b, 4b-2c and the target SDK resolution).
 
 | Platform | Commit | `pytest packages/agent-core/codegen` | Ruff |
 |---|---|---|---|
-| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4b-2c (the commit that added this row) | **843 passed, 5 skipped, 1 xfailed** (about 2.4 min) | `ruff check` clean; `ruff format --check` clean (77 files); `compileall` clean |
-| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4b-2c | **847 passed, 1 skipped, 1 xfailed** (about 46 s) | `ruff check` clean; `ruff format --check` clean (Linux ruff counted 78 files; both trees hold the same 77 `.py` files); `compileall` clean |
+| Windows 10, Python 3.12.10, Git 2.56.1 | Target SDK resolution (the commit that added this row) | **964 passed, 5 skipped, 1 xfailed** (about 2.3 min) | `ruff check` clean; `ruff format --check` clean (78 files); `compileall` clean |
+| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Target SDK resolution | **968 passed, 1 skipped, 1 xfailed** (about 46 s) | `ruff check` clean; `ruff format --check` clean (Linux ruff counted 79 files; both trees hold the same 78 `.py` files); `compileall` clean |
+| Windows / Linux | `d549a35` (Phase 4b-2c) | 843 passed, 5 skipped, 1 xfailed / 847 passed, 1 skipped, 1 xfailed | clean (77 files) |
 | Windows / Linux | `69254e1` (Phase 4b-2b) | 778 passed, 5 skipped, 1 xfailed / 782 passed, 1 skipped, 1 xfailed | clean (74 files) |
 | Windows / Linux | `65e9d50` (Phase 4b-2a) | 682 passed, 5 skipped, 1 xfailed / 686 passed, 1 skipped, 1 xfailed | clean (72 files) |
 | Windows / Linux | `912727b` (Phase 4a.7) | 623 passed, 5 skipped, 1 xfailed / 627 passed, 1 skipped, 1 xfailed | clean (67 files) |
@@ -703,6 +732,41 @@ mutations are caught, and the original 22 4a mutations still are.
   evidence for that rule. `nowinandroid` has no readable application module (convention plugins), so none of the new
   faults could be injected there.
 
+### Target SDK resolution verification
+
+- **121 new tests** (`tests/test_review_target_sdk.py`, many parametrised): every supported way of writing the target
+  (a number, a catalog version in five spellings, `buildSrc` and `build-logic` constants in four shapes) resolves to
+  the right number and the right line; 18 forms that must stay unknown do; and each affected rule is checked at its
+  boundary SDK level (quiet one level below, reporting at the threshold) through **every** mechanism: 31 for
+  `PendingIntent` mutability, 34 for the mutable-implicit and receiver-flag rules, 28 for plain-HTTP URLs and the
+  cleartext note, 23 for `permission_never_requested`, 31 for `manifest.exported_missing`. Projects whose target cannot
+  be resolved behave exactly as before, a library is judged by its own resolved target or else its application's, and
+  `gradle.sdk_order` / `change.sdk_changed` are pinned as unchanged.
+- **Mutation check: 27 of 27 caught** for the resolver and its three call sites. The first run caught 24: two anchors
+  matched in two places and were made unique, and one mutation survived because, for an application module, the
+  module-level and the application-level lookup give the same answer; a test with a library that resolves its own
+  target now tells them apart. Two guards that no input could distinguish from their absence (a check on
+  `catalog.error`, which already yields no versions, and an identifier pattern in front of a dictionary lookup) were
+  removed rather than kept. The earlier suites were re-run against the final code and all still catch everything:
+  114 of 114 (4a.6 to 4b-2a), 143 of 143 (4b-2b), 94 of 94 (4b-2c) and 22 of 22 (4a), so **400 of 400** in all. One
+  4b-2b mutation first reported "anchor not found" because it targeted the line this change replaced; its anchor was
+  updated and it is caught.
+- **Real projects: the resolution works and nothing new is reported.** `iosched`: all 6 scripts that mention `targetSdk`
+  resolve to 30 through `Versions.TARGET_SDK`; `sunflower`: both resolve to 34 through the catalog; `platform-samples`
+  (37) and `AntennaPod`'s `app-wearos` (36) were already numbers and are unchanged; `AntennaPod`'s `app` module
+  (shared script) and `nowinandroid` (convention plugins) stay unresolved. Every rule was run on all five projects
+  and the findings are **identical** to before the change (`gradle.duplicate_dependency` x3, `import.missing`,
+  `import.duplicate`, and the unconfirmed `AntennaPod` `READ_EXTERNAL_STORAGE` finding), so there is no new
+  false positive to explain. That is also the evidence for `manifest.exported_missing` on `sunflower` (target 34): the
+  rule is now live there and finds nothing in its manifest.
+- **Faults injected in memory: 101 of 121 caught (was 96).** The five newly caught: on `sunflower` (target 34) the
+  mutable implicit `PendingIntent`, the `registerReceiver` without an export flag, the plain-HTTP `baseUrl` and the
+  dropped `android:exported`; on `iosched` (target 30) the plain-HTTP `baseUrl`. The 20 silent ones were each checked.
+  Three are correct *because* the target is now known: `iosched` really targets 30, below the Android 12 and 14
+  thresholds, so its dropped `exported`, mutable-implicit and receiver faults are not violations. The rest are the
+  readability gates described under 4b-2c (AppAuth and Credential Manager on four projects), `AntennaPod`'s `app`
+  target in a shared script and its cleartext configuration, and the older 4b-1 and 4b-2a cases.
+
 ### Platform coverage (Windows and Linux together)
 
 Some tests can only run on one operating system, so each platform skips some. Together they cover all 415 tests:
@@ -815,9 +879,10 @@ Phase 4b-1 (manifest, build and change-aware rules):
   need a module's whole dependency list, so they are silent for any module that applies a convention plugin or
   has a dependency call that cannot be parsed. `manifest.permission_missing` further needs *every* module to be
   readable, so on real multi-module projects it usually does not fire (it was silent on all five clones).
-  `manifest.exported_missing` and `gradle.compose_plugin_missing` need a literal `targetSdk` / Kotlin version, and
-  a constant or a convention plugin silences them (3 of 5 clones). Readable single-module projects, which is what
-  generation produces, get the full set.
+  `manifest.exported_missing` needs a resolvable `targetSdk` (see "Target SDK resolution": a number, a catalog
+  version or a `buildSrc` constant) and `gradle.compose_plugin_missing` a literal Kotlin version; a convention plugin
+  or a shared script silences them (the target stays unresolved in 2 of 5 clones, the Kotlin version in 3). Readable
+  single-module projects, which is what generation produces, get the full set.
 - `change.dependency_removed` is judged project-wide: removing a library from one module while another module
   still declares it is not reported. Moving a dependency between modules is therefore not noise, and a real
   removal from one module can be missed.
@@ -863,13 +928,11 @@ Phase 4b-2a (navigation and deep links):
 
 Phase 4b-2b (security):
 
-- **The call-site rules need a literal target SDK, and most real projects do not write one.** Only `platform-samples`
-  (of five) states `targetSdk` as a number. `sunflower` writes `libs.versions.targetSdk.get().toInt()`, `iosched` a
-  `buildSrc` constant (`Versions.TARGET_SDK`, which is 30), `AntennaPod`'s app module takes it from a shared script
-  (`apply from: "../common.gradle"`), and `nowinandroid` uses convention plugins. In those projects `security.pending_intent_*`, `security.receiver_export_flag_missing` and
-  `security.cleartext_url_blocked` stay silent by design. Resolving a catalog version or a `buildSrc` constant would
-  fix this, but it reads Gradle more completely than 4b-2b was approved to, and it would also change
-  `manifest.exported_missing` (which uses the same target), so it was **not done**; it is the obvious next step.
+- **The call-site rules need a target SDK the build states plainly.** When 4b-2b was committed only
+  `platform-samples` (of five) wrote `targetSdk` as a number, so these rules were silent on the rest; the follow-up
+  under "Target SDK resolution" now also reads a catalog version and a `buildSrc` constant, which covers `sunflower`
+  and `iosched`. They stay silent where the target is still unknown: `AntennaPod`'s app module (shared script),
+  `nowinandroid` (convention plugins) and any computed expression.
 - **Library manifests cannot be read.** `security.permission_not_declared` therefore says "a library's manifest
   could" declare the permission, and `security.permission_never_requested` can be wrong when an SDK asks for the
   permission itself. The latter is judged only in a module whose own code already requests or checks permissions

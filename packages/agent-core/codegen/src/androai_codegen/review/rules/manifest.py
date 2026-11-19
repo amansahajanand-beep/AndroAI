@@ -184,8 +184,9 @@ def _target_sdk(a: ProjectAnalysis, manifest_path: str) -> int | None:
     module = a.module_of(manifest_path)
     if module is not None:
         for script in a.module_scripts(module):
-            if script.target_sdk:
-                return script.target_sdk[0]
+            declared = a.target_sdk_of(script)
+            if declared:
+                return declared[0]
     return a.target.target_sdk
 
 

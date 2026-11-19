@@ -78,12 +78,13 @@ def _target_for(a: ProjectAnalysis, path: str) -> int | None:
     module = a.module_of(path)
     if module is not None:
         for script in a.module_scripts(module):
-            if script.target_sdk:
-                return script.target_sdk[0]
+            declared = a.target_sdk_of(script)
+            if declared:
+                return declared[0]
     app_targets: list[int | None] = []
     for candidate in sorted(a.modules):
         if a.is_application(candidate):
-            found = [s.target_sdk[0] for s in a.module_scripts(candidate) if s.target_sdk]
+            found = [d[0] for s in a.module_scripts(candidate) if (d := a.target_sdk_of(s))]
             app_targets.append(found[0] if found else None)
     if app_targets:
         return None if None in app_targets else min(t for t in app_targets if t is not None)
