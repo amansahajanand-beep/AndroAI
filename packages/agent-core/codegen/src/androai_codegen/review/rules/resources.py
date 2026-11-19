@@ -7,6 +7,7 @@ import re
 from collections.abc import Iterator
 
 from ..analysis import ProjectAnalysis
+from ..catalog import LIBRARY_RESOURCE_NAMES
 from ..models import Finding, Severity, finding
 from ..resources import CODE_REF, KNOWN_TYPES, STRICT_TYPES, VALUE_TAGS
 
@@ -57,10 +58,21 @@ def _unreliable_types(a: ProjectAnalysis) -> frozenset[str]:
     return frozenset(types)
 
 
+def _provided_by_dependency(a: ProjectAnalysis, kind: str, name: str) -> bool:
+    groups = LIBRARY_RESOURCE_NAMES.get((kind, name.replace(".", "_")), ())
+    return any(
+        declared == group or declared.startswith(group + ".")
+        for declared in a.dependency_groups
+        for group in groups
+    )
+
+
 def _unresolved(a: ProjectAnalysis, kind: str, name: str, unreliable: frozenset[str]) -> bool:
     if kind in _SKIPPED_TYPES or kind not in KNOWN_TYPES or kind in unreliable:
         return False
     if a.resources.has(kind, name) or a.resources.is_library_resource(kind, name):
+        return False
+    if _provided_by_dependency(a, kind, name):
         return False
     return kind in STRICT_TYPES or kind == "style"
 

@@ -637,6 +637,15 @@ LIBRARY_RESOURCE_PREFIXES = (
     "fragment_",
     "$",
 )
+# Individual library resources that have no telltale prefix: (type, name) -> Maven groups of the
+# dependencies that provide it. Unlike the prefixes above these are only trusted when the project
+# really declares one of the groups, so the same name without the dependency is still an error.
+LIBRARY_RESOURCE_NAMES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("string", "appbar_scrolling_view_behavior"): ("com.google.android.material",),
+    ("integer", "google_play_services_version"): ("com.google.android.gms",),
+    ("id", "recycler_view"): ("androidx.preference", "androidx.leanback"),
+    ("id", "select_dialog_listview"): ("androidx.appcompat",),
+}
 # Compared against the underscore form of a name (``Theme.Material3.X`` -> ``Theme_Material3_X``).
 # A bare ``Theme_`` is NOT here: ``@style/Theme.MyApp`` is the app's own and must be defined.
 LIBRARY_STYLE_PREFIXES = (

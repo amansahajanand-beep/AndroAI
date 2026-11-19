@@ -115,6 +115,32 @@ def _split_top_level(text: str) -> list[str]:
     return parts
 
 
+_ENUM_CONSTANT = re.compile(r"\s*(?:@[\w.]+(?:\([^)]*\))?\s*)*([A-Za-z_]\w*)")
+
+
+def _enum_constants(body: str) -> list[str]:
+    """Names of the constants at the start of an enum body (up to the first top-level ``;``).
+
+    Handles arguments (``Header(1)``) and constant bodies (``Response { ... }``).
+    """
+    segments: list[str] = []
+    depth = 0
+    start = 0
+    for index, ch in enumerate(body):
+        if ch in "({[":
+            depth += 1
+        elif ch in ")}]":
+            depth = max(0, depth - 1)
+        elif depth == 0 and ch in ",;":
+            segments.append(body[start:index])
+            start = index + 1
+            if ch == ";":
+                break
+    else:
+        segments.append(body[start:])
+    return [m.group(1) for s in segments if (m := _ENUM_CONSTANT.match(s))]
+
+
 def _simple_type_name(text: str) -> str | None:
     text = re.sub(r"\s+by\s+.*$", "", text.strip(), flags=re.S)
     previous = None
@@ -388,6 +414,20 @@ class SourceFile:
         return [m.group(1) for m in _TOP_VAL.finditer(self.masked) if self.depth_at(m.start()) == 0]
 
     # -- usage --------------------------------------------------------------------------
+
+    @cached_property
+    def enum_entries(self) -> set[str]:
+        """Names of enum constants declared in this file (declarations, not uses of a type)."""
+        names: set[str] = set()
+        for decl in self.types:
+            if decl.kind != "enum":
+                continue
+            open_index = self.masked.find("{", decl.offset)
+            if open_index < 0:
+                continue
+            close = matching_close(self.masked, open_index)
+            names.update(_enum_constants(self.masked[open_index + 1 : close]))
+        return names
 
     @cached_property
     def used_names(self) -> dict[str, int]:

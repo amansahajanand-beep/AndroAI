@@ -13,7 +13,7 @@ from .project import ProjectFiles
 from .proto import generated_classes
 from .resources import ResourceIndex
 from .source import SourceFile, TypeDecl
-from .xmlparse import XmlDoc, XmlNode, parse_xml
+from .xmlparse import DOCTYPE_REFUSED, XmlDoc, XmlNode, parse_xml
 
 COMPONENT_TAGS = ("activity", "activity-alias", "service", "receiver", "provider")
 _XML_PROLOG_AND_COMMENTS = re.compile(r"<\?.*?\?>|<!--.*?-->", re.DOTALL)
@@ -158,6 +158,20 @@ class ProjectAnalysis:
         return frozenset(found)
 
     @cached_property
+    def refused_xml(self) -> frozenset[str]:
+        """Well-formed XML we refuse to parse because it has a DOCTYPE, outside ``res/`` and the
+        manifest (tool configuration such as ``checkstyle.xml``). It is not Android input, so
+        refusing it is not a project error; it stays listed as unparsed."""
+        return frozenset(
+            path
+            for path, doc in self.xml_docs.items()
+            if doc.error
+            and doc.error.message == DOCTYPE_REFUSED
+            and not path.endswith("AndroidManifest.xml")
+            and "/res/" not in f"/{path}"
+        )
+
+    @cached_property
     def catalog_path(self) -> str | None:
         found = [p for p in self.files.texts if p.endswith("libs.versions.toml")]
         return sorted(found)[0] if found else None
@@ -190,7 +204,8 @@ class ProjectAnalysis:
 
     @cached_property
     def resources(self) -> ResourceIndex:
-        return ResourceIndex(self.files.paths, self.xml_docs)
+        generated = [rv for script in self.gradle_scripts.values() for rv in script.res_values]
+        return ResourceIndex(self.files.paths, self.xml_docs, generated)
 
     # -- modules ------------------------------------------------------------------------
 

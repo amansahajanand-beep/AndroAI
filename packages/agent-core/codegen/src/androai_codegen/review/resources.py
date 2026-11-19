@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from .catalog import LIBRARY_RESOURCE_PREFIXES, LIBRARY_STYLE_PREFIXES
@@ -76,8 +77,16 @@ class XmlRef:
 
 
 class ResourceIndex:
-    def __init__(self, paths: frozenset[str], xml: dict[str, XmlDoc]) -> None:
+    def __init__(
+        self,
+        paths: frozenset[str],
+        xml: dict[str, XmlDoc],
+        generated: Iterable[tuple[str, str]] = (),
+    ) -> None:
         self.defs: dict[tuple[str, str], list[ResDef]] = defaultdict(list)
+        # Names that exist but are not definitions to compare: Gradle ``resValue`` (declared once
+        # per build type) and ``<attr>`` references inside ``<declare-styleable>``.
+        self.soft: set[tuple[str, str]] = {(k, normalize_name(n)) for k, n in generated}
         self._xml = xml
         for path in sorted(paths):
             match = _RES_PATH.search(path)
@@ -124,7 +133,10 @@ class ResourceIndex:
             if child.tag == "declare-styleable":
                 for attr in child.children:
                     if attr.tag == "attr" and attr.attrs.get("name"):
-                        self._add("attr", attr.attrs["name"], path, attr.line, directory)
+                        if attr.attrs.get("format") or attr.children:
+                            self._add("attr", attr.attrs["name"], path, attr.line, directory)
+                        else:  # no format: this only refers to an attr defined elsewhere
+                            self.soft.add(("attr", normalize_name(attr.attrs["name"])))
         self._index_ids(path, directory, root)
 
     def _index_ids(self, path: str, directory: str, root: XmlNode) -> None:
@@ -135,7 +147,8 @@ class ResourceIndex:
                         self._add("id", match.group(3), path, node.line, directory)
 
     def has(self, kind: str, name: str) -> bool:
-        return (kind, normalize_name(name)) in self.defs
+        key = (kind, normalize_name(name))
+        return key in self.defs or key in self.soft
 
     def duplicates(self) -> list[tuple[str, str, list[ResDef]]]:
         """(type, name, defs) defined more than once in the same resource directory."""

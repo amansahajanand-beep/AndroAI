@@ -57,6 +57,9 @@ class _Rejected(Exception):
         self.message = message
 
 
+DOCTYPE_REFUSED = "DOCTYPE and entity declarations are not allowed"
+
+
 def parse_xml(text: str) -> XmlDoc:
     """Parse ``text``. Never raises: failures come back as ``XmlDoc.error``."""
     parser = expat.ParserCreate()
@@ -67,7 +70,7 @@ def parse_xml(text: str) -> XmlDoc:
     count = 0
 
     def reject_doctype(*_args: object) -> None:
-        raise _Rejected("DOCTYPE and entity declarations are not allowed")
+        raise _Rejected(DOCTYPE_REFUSED)
 
     def start(name: str, attrs: dict[str, str]) -> None:
         nonlocal count

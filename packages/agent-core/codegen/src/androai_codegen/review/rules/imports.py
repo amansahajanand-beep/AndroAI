@@ -83,6 +83,7 @@ def _declared_names(source: SourceFile) -> set[str]:
     names = {t.name for t in source.types}
     names.update(f.name for f in source.functions)
     names.update(source.top_level_values)
+    names.update(source.enum_entries)
     return names
 
 
