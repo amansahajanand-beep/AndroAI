@@ -132,15 +132,21 @@ _PACKAGES: tuple[tuple[str, str], ...] = (
     ("android", "Manifest"),
     (
         "android.widget",
-        "Toast TextView Button EditText ImageView ProgressBar LinearLayout FrameLayout RelativeLayout ListView Spinner SeekBar ArrayAdapter Switch CheckBox",
+        "Toast TextView Button EditText ImageView ProgressBar LinearLayout FrameLayout RelativeLayout ListView Spinner SeekBar ArrayAdapter Switch CheckBox RadioButton",
     ),
     (
         "android.view",
-        "View ViewGroup LayoutInflater MenuItem Menu WindowManager Gravity MotionEvent KeyEvent",
+        "View ViewGroup LayoutInflater MenuItem Menu WindowManager Gravity MotionEvent KeyEvent Surface",
     ),
     ("android.util", "Log AttributeSet"),
     ("android.net", "Uri NetworkCapabilities"),
-    ("android.graphics", "Bitmap BitmapFactory Paint Rect Matrix Typeface"),
+    # Color, Canvas, Icon, Image, Surface and RadioButton also exist as Compose/library types listed
+    # earlier. They are here too so that a wildcard import of the framework package provides them;
+    # the Compose candidate stays first in a suggestion.
+    ("android.graphics", "Bitmap BitmapFactory Paint Rect Matrix Typeface Color Canvas"),
+    ("android.graphics.drawable", "Icon"),
+    ("android.media", "Image"),
+    ("com.google.android.material.snackbar", "Snackbar"),
     ("android.text", "TextUtils Editable TextWatcher"),
     ("android.webkit", "WebView WebViewClient WebSettings WebChromeClient"),
     ("android.provider", "Settings MediaStore"),
@@ -235,6 +241,9 @@ _PACKAGES: tuple[tuple[str, str], ...] = (
         "java.util.concurrent",
         "Executors ExecutorService TimeUnit ConcurrentHashMap CountDownLatch CompletableFuture Executor",
     ),
+    # Listed last on purpose: ``Path`` is far more often Retrofit's annotation, which stays the first
+    # suggestion, while a wildcard import of android.graphics must still provide the framework class.
+    ("android.graphics", "Path"),
 )
 
 # Names that Java needs imported but Kotlin sees by default (kotlin.collections.* typealiases).
@@ -294,6 +303,9 @@ class ImportPattern:
     # A bare call may instead be a member of an implicit receiver (``rule.apply { setContent {} }``),
     # which needs no import. Inside such a scope the call proves nothing.
     member_possible: bool = False
+    # A call *shape* that only the receiver's own member can have, so no import is involved
+    # (``items(count = n)`` in a lazy list is the scope's member; the list form is an extension).
+    member_form: re.Pattern[str] | None = None
 
 
 def _call(
@@ -303,6 +315,7 @@ def _call(
     compose_only: bool = False,
     requires: str | None = None,
     member_possible: bool = False,
+    member_form: str | None = None,
 ) -> ImportPattern:
     return ImportPattern(
         label,
@@ -311,6 +324,7 @@ def _call(
         compose_only,
         re.compile(requires) if requires else None,
         member_possible,
+        re.compile(member_form) if member_form else None,
     )
 
 
@@ -435,6 +449,10 @@ CALL_IMPORTS: tuple[ImportPattern, ...] = (
         "androidx.compose.foundation.lazy.grid.items",
         compose_only=True,
         requires=_LAZY_FILE,
+        # LazyListScope / LazyGridScope declare ``items(count: Int, ...)`` themselves. A first
+        # argument that is certainly an Int (named ``count``, an integer literal, or a ``.size`` /
+        # ``.itemCount``) selects that member; a list argument selects the extension to import.
+        member_form=r"(?<![\w.])items\s*\(\s*(?:count\s*=|\d+\s*[,)]|[\w.]+\.(?:size|itemCount)\s*[,)])",
     ),
     _call(
         "itemsIndexed",

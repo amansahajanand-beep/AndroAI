@@ -8,7 +8,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 1 | File-editing abstraction and patch engine | **Done, hardened (`5aea805`), verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
-| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property). **4b-2 and 4b-3 not started**: navigation, security, API usage, null safety. |
+| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2 and 4b-3 not started**: navigation, security, API usage, null safety. |
 | 5 | New project generation | Not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
@@ -201,8 +201,9 @@ Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening, 
 
 | Platform | Commit | `pytest packages/agent-core/codegen` | Ruff |
 |---|---|---|---|
-| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4a.6 (the commit that added this row) | **594 passed, 5 skipped, 1 xfailed** (about 2 min) | `ruff check` clean; `ruff format --check` clean (66 files); `compileall` clean |
-| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4a.6 | **598 passed, 1 skipped, 1 xfailed** (about 25 s) | `ruff check` clean; `ruff format --check` clean (66 files); `compileall` clean |
+| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4a.7 (the commit that added this row) | **623 passed, 5 skipped, 1 xfailed** (about 2.3 min) | `ruff check` clean; `ruff format --check` clean (67 files); `compileall` clean |
+| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4a.7 | **627 passed, 1 skipped, 1 xfailed** (about 28 s) | `ruff check` clean; `ruff format --check` clean (67 files); `compileall` clean |
+| Windows / Linux | `b12e5b8` (Phase 4a.6) | 594 passed, 5 skipped, 1 xfailed / 598 passed, 1 skipped, 1 xfailed | clean (66 files) |
 | Windows / Linux | `12c2618` (Phase 4b-1) | 576 passed, 5 skipped, 1 xfailed / 580 passed, 1 skipped, 1 xfailed | clean (64 files). Measured one edit before the commit: a pure performance memoization of `dependency_groups_for`, re-checked by the review tests |
 | Windows 10, Python 3.12.10, Git 2.56.1 | `8f20e01` (code of the latest commit) | **500 passed, 5 skipped, 1 xfailed** (about 1.3 min: the VCS tests spawn git) | `ruff check` clean; `ruff format --check` clean (58 files); `compileall` clean |
 | Linux (WSL Ubuntu, kernel 6.18 WSL2, Python 3.14.4, git 2.53.0, ext4), `git archive` export | `8f20e01` | **504 passed, 1 skipped, 1 xfailed** (about 24 s) | `ruff check` clean; `ruff format --check` clean (58 files); `compileall` clean |
@@ -443,6 +444,30 @@ of the five projects. 18 new tests (6 for imports, 12 for resources), 7 new muta
 4a mutations are still all caught (two of their anchors had gone stale in an earlier refactor, before this work, and
 were refreshed).
 
+### Phase 4a.7: two `import.missing` false positives found on real projects
+
+1. **`items(count = n)` in a lazy list or grid** (sunflower, `GalleryScreen.kt`). `LazyListScope` and
+   `LazyGridScope` declare `items(count: Int, ...)` themselves, so that form needs no import; only the extension
+   that takes a list (`...lazy.items`, `...lazy.grid.items`) does. A catalog pattern can now carry a
+   `member_form`: a call shape that only the member can have. For `items` it is a first argument that is certainly
+   an `Int`: a named `count =`, an integer literal, or an expression ending in `.size` or `.itemCount`. The list
+   form (`items(list)`, `items(items = list)`) is still reported without its import, also when a member call is
+   present in the same file. `items(total)` is **not** excused: `total` may be an `Int` or a list and nothing in
+   the call says which (a test pins this as a documented limit).
+2. **Framework classes behind a wildcard import** (platform-samples, `Surface` with `import android.view.*`). The
+   catalog listed `Surface` only as the Compose type, so no wildcard import could ever provide it. A probe of the
+   catalog found the same gap for seven more names that exist both as Compose or library types and as framework
+   classes: `Color` and `Canvas` (`android.graphics`), `Path` (`android.graphics`, listed after Retrofit's so the
+   annotation stays the first suggestion), `Icon` (`android.graphics.drawable`), `Image` (`android.media`),
+   `RadioButton` (`android.widget`) and `Snackbar` (Material Components). All eight are now listed. An explicit
+   import of any of them already worked; a wildcard of an unrelated package still does not provide them, and the
+   same names with no import at all are still reported.
+
+Results: `sunflower` 1 `import.missing` to 0, `platform-samples` 1 to 0; no other change on the five projects (what is left
+is a documented xfail, a true duplicate import and three true duplicate-dependency warnings). 29 new tests (10 for
+`items`, 19 for the framework classes, including Java and the suggestion order), 13 new mutations: all 77 current
+mutations are caught, and the original 22 4a mutations still are.
+
 ### Platform coverage (Windows and Linux together)
 
 Some tests can only run on one operating system, so each platform skips some. Together they cover all 415 tests:
@@ -575,15 +600,15 @@ Phase 4b-1 (manifest, build and change-aware rules):
 - `gradle.sdk_order` is a warning because the exact behaviour of the Android Gradle plugin for out-of-order levels
   was not verified against a build. `gradle.compose_plugin_missing` states what the Kotlin 2.0 Compose compiler
   plugin requires; it was not checked against a real failing build either. Nothing in 4b was compiled.
-- **Two known false positives of the older `import.missing` rule remain**, found on `sunflower` and Android's
-  `platform-samples` (the other two found there were fixed in Phase 4a.6):
-  - `items(count = n, key = ...) { ... }` inside `LazyVerticalGrid { }` (sunflower, `GalleryScreen.kt`) is reported
-    as a missing import. That form is the grid scope's own *member* function and needs no import; the curated
-    entry only knows the extension that takes a list (`androidx.compose.foundation.lazy.grid.items`).
-  - `Surface` in a file with `import android.view.*` (platform-samples, `Camera2ImageCapture.kt`) is reported,
-    because the catalog lists only the Compose `Surface`, so the wildcard import is not recognised as providing
-    `android.view.Surface`.
-  Both have a known cause and a small fix; neither was in the approved scope.
+- **No known false positive of the 4a rules remains on the five validation projects** (Phases 4a.6 and 4a.7
+  fixed the last four). Two limits stay by design:
+  - `items(total) { ... }` in a lazy list is judged as the extension that needs its import, because `total` may be
+    an `Int` or a list and the call does not say which. Only a named `count =`, an integer literal, or a `.size` /
+    `.itemCount` argument selects the member.
+  - A wildcard import provides a framework class only if the catalog lists that class. Eight names that exist both as
+    Compose or library types and as framework classes are listed (`Surface`, `Color`, `Canvas`, `Path`, `Icon`,
+    `Image`, `RadioButton`, `Snackbar`); another such name used with a wildcard import of its framework package would
+    still be reported until it is added. The probe that found these checked twenty well-known names, not every class.
 
 ## Unfinished integration work
 

@@ -267,7 +267,10 @@ def _one_pattern(
         return
     code = source.code
     match = pattern.regex.search(code)
-    while match and pattern.member_possible and _in_receiver_scope(code, match.start()):
+    while match and (
+        (pattern.member_possible and _in_receiver_scope(code, match.start()))
+        or (pattern.member_form is not None and pattern.member_form.match(code, match.start()))
+    ):
         match = pattern.regex.search(code, match.end())
     if not match:
         return
