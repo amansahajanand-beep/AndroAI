@@ -8,7 +8,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 1 | File-editing abstraction and patch engine | **Done, hardened (`5aea805`), verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
-| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). **4b-2 and 4b-3 not started**: navigation, security, API usage, null safety. |
+| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property). **4b-2 and 4b-3 not started**: navigation, security, API usage, null safety. |
 | 5 | New project generation | Not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
@@ -201,8 +201,9 @@ Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening, 
 
 | Platform | Commit | `pytest packages/agent-core/codegen` | Ruff |
 |---|---|---|---|
-| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4b-1 (the commit that added this row) | **576 passed, 5 skipped, 1 xfailed** (about 2 min) | `ruff check` clean; `ruff format --check` clean (64 files); `compileall` clean |
-| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4b-1 | **580 passed, 1 skipped, 1 xfailed** (about 27 s) | `ruff check` clean; `ruff format --check` clean (64 files) |
+| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4a.6 (the commit that added this row) | **594 passed, 5 skipped, 1 xfailed** (about 2 min) | `ruff check` clean; `ruff format --check` clean (66 files); `compileall` clean |
+| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4a.6 | **598 passed, 1 skipped, 1 xfailed** (about 25 s) | `ruff check` clean; `ruff format --check` clean (66 files); `compileall` clean |
+| Windows / Linux | `12c2618` (Phase 4b-1) | 576 passed, 5 skipped, 1 xfailed / 580 passed, 1 skipped, 1 xfailed | clean (64 files). Measured one edit before the commit: a pure performance memoization of `dependency_groups_for`, re-checked by the review tests |
 | Windows 10, Python 3.12.10, Git 2.56.1 | `8f20e01` (code of the latest commit) | **500 passed, 5 skipped, 1 xfailed** (about 1.3 min: the VCS tests spawn git) | `ruff check` clean; `ruff format --check` clean (58 files); `compileall` clean |
 | Linux (WSL Ubuntu, kernel 6.18 WSL2, Python 3.14.4, git 2.53.0, ext4), `git archive` export | `8f20e01` | **504 passed, 1 skipped, 1 xfailed** (about 24 s) | `ruff check` clean; `ruff format --check` clean (58 files); `compileall` clean |
 | Windows / Linux | `ce547ad` | 454 passed, 5 skipped, 1 xfailed / 458 passed, 1 skipped, 1 xfailed | clean (53 files) |
@@ -412,6 +413,36 @@ that was already correct.
   other modules too). In all five projects the missing-INTERNET fault was caught only by `change.permission_removed`:
   `manifest.permission_missing` stayed silent because some module's dependencies are not fully readable.
 
+### Phase 4a.6: two false positives found on real projects
+
+Both appeared when 4b-1 was validated on `android/platform-samples` (the older 4a rules, not the new ones).
+
+1. **`import.conflicting` for a class next to an icon.** `import android.provider.Settings` together with
+   `import androidx.compose.material.icons.rounded.Settings` was reported as two imports of one name. Kotlin only
+   rejects an import clash between two *classifiers*; the icon is an extension property, so it never clashes with
+   anything. The old check excused two icons but not an icon next to a class. It now excuses any pair in which
+   either side is a known icon. Two classes of one name (`java.util.Date` and `java.sql.Date`, in Kotlin and in
+   Java) are still reported, including when an unrelated icon is imported in the same file.
+2. **`resource.unresolved` for resources a library ships.** `@layout/glance_default_loading_layout`,
+   `@bool/glance_appwidget_available` (Glance), `@color/cardview_shadow_start_color` (CardView) and
+   `@animator/nav_default_*_anim` (Navigation) were reported (17 findings in one project), because a project cannot
+   see inside a library. The curated table only knew exact names. It now also knows a library's name *families*
+   (`LIBRARY_RESOURCE_FAMILIES`: `glance_*`, `cardview_*` (CardView or Material Components), `nav_default_*`
+   (animations only) and `lb_*` (Leanback)), trusted the same way as before: only when the project declares a
+   library of that group. The same name without the library is still reported, and a name with the right prefix but
+   the wrong resource type (a *string* called `nav_default_enter_anim`) is not excused.
+
+**An attempt that was reverted.** A first version also excused these names whenever the module's dependencies
+could not be read in full. An existing test (`test_library_resource_is_still_unresolved_without_the_providing_dependency`)
+deliberately asserts the opposite, and the real project did not need it (it declares the libraries), so the fallback
+was removed and the existing behaviour kept. The consequence is the limitation already listed: a library that only
+a convention plugin adds is not seen, and its resources are still reported.
+
+Results: `platform-samples` 17 `resource.unresolved` and 1 `import.conflicting` to 0 and 0; no other change on any
+of the five projects. 18 new tests (6 for imports, 12 for resources), 7 new mutations, all caught; the original 22
+4a mutations are still all caught (two of their anchors had gone stale in an earlier refactor, before this work, and
+were refreshed).
+
 ### Platform coverage (Windows and Linux together)
 
 Some tests can only run on one operating system, so each platform skips some. Together they cover all 415 tests:
@@ -487,9 +518,10 @@ Phase 4 (code review):
   as a missing import, because library classes are invisible to a static review. Excusing names inside classes
   that extend library types would also hide a missing `Context` import in every `Fragment`, which is far more
   common. A strict-xfail test records it; it fails loudly if the behaviour ever changes.
-- The library-resource table (`LIBRARY_RESOURCE_NAMES`, 4 entries) is curated by hand and each entry is only
-  trusted when its Maven group is declared. Other library-provided resources without a known prefix are still
-  reported as unresolved.
+- The library-resource tables (`LIBRARY_RESOURCE_NAMES`, 4 exact names, and `LIBRARY_RESOURCE_FAMILIES`, 4 name
+  families) are curated by hand and each entry is only trusted when its Maven group is declared. Other
+  library-provided resources without a known prefix are still reported as unresolved, and so is a library resource
+  whose library only a convention plugin adds.
 - Heuristics added for real code are deliberately narrow: implicit-receiver calls are only excused for
   `setContent` inside `apply`/`run`/`with`; a package counts as library-provided only under framework roots, the
   curated library list or a declared dependency's group; `include(...)` paths are assumed to be directories
@@ -543,13 +575,15 @@ Phase 4b-1 (manifest, build and change-aware rules):
 - `gradle.sdk_order` is a warning because the exact behaviour of the Android Gradle plugin for out-of-order levels
   was not verified against a build. `gradle.compose_plugin_missing` states what the Kotlin 2.0 Compose compiler
   plugin requires; it was not checked against a real failing build either. Nothing in 4b was compiled.
-- **Known false positives from the older 4a rules, found while validating 4b on two projects that were not in the
-  4a validation set, `sunflower` and Android's `platform-samples` (not fixed, not part of 4b):** `resource.unresolved` for resources shipped by libraries
-  (`glance_default_loading_layout` and `glance_appwidget_available` from Glance, `cardview_shadow_start_color`
-  from CardView, the `nav_default_*_anim` animators from Navigation: 17 findings in one project), and
-  `import.conflicting` when one name is a class and the other an extension property
-  (`android.provider.Settings` and the `Icons.Rounded.Settings` icon). `import.missing` for `items` (sunflower) and
-  `Surface` (p2) were not investigated.
+- **Two known false positives of the older `import.missing` rule remain**, found on `sunflower` and Android's
+  `platform-samples` (the other two found there were fixed in Phase 4a.6):
+  - `items(count = n, key = ...) { ... }` inside `LazyVerticalGrid { }` (sunflower, `GalleryScreen.kt`) is reported
+    as a missing import. That form is the grid scope's own *member* function and needs no import; the curated
+    entry only knows the extension that takes a list (`androidx.compose.foundation.lazy.grid.items`).
+  - `Surface` in a file with `import android.view.*` (platform-samples, `Camera2ImageCapture.kt`) is reported,
+    because the catalog lists only the Compose `Surface`, so the wildcard import is not recognised as providing
+    `android.view.Surface`.
+  Both have a known cause and a small fix; neither was in the approved scope.
 
 ## Unfinished integration work
 

@@ -378,12 +378,15 @@ def _may_coexist(
 ) -> bool:
     """Two imports of one simple name that Kotlin accepts side by side.
 
-    Icons differ by receiver (see ``_is_icon``). Lowercase names are functions or properties,
-    which overload by receiver and arguments. A project function or property and a class of the
-    same name (``fun Rule.CoroutineScope()`` next to ``kotlinx.coroutines.CoroutineScope``) live in
-    different namespaces. Two *types* of the same name are a real clash.
+    Kotlin only rejects two imports of one name when both are classifiers. An icon is an
+    extension property (see ``_is_icon``), so it never clashes: not with another icon, which
+    differs by receiver, and not with a class (``android.provider.Settings`` next to
+    ``Icons.Rounded.Settings``). Lowercase names are functions or properties, which overload by
+    receiver and arguments. A project function or property and a class of the same name
+    (``fun Rule.CoroutineScope()`` next to ``kotlinx.coroutines.CoroutineScope``) live in different
+    namespaces. Two *types* of the same name are a real clash.
     """
-    if _is_icon(first) and _is_icon(second):
+    if _is_icon(first) or _is_icon(second):
         return True
     if source.language == "kotlin" and name[:1].islower():
         return True

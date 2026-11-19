@@ -7,7 +7,7 @@ import re
 from collections.abc import Iterator
 
 from ..analysis import ProjectAnalysis
-from ..catalog import LIBRARY_RESOURCE_NAMES
+from ..catalog import LIBRARY_RESOURCE_FAMILIES, LIBRARY_RESOURCE_NAMES
 from ..models import Finding, Severity, finding
 from ..resources import CODE_REF, KNOWN_TYPES, STRICT_TYPES, VALUE_TAGS
 
@@ -58,8 +58,21 @@ def _unreliable_types(a: ProjectAnalysis) -> frozenset[str]:
     return frozenset(types)
 
 
+def _shipping_groups(kind: str, name: str) -> tuple[str, ...]:
+    """Maven groups known to ship this resource: an exact entry or a library's name family."""
+    underscored = name.replace(".", "_")
+    groups = list(LIBRARY_RESOURCE_NAMES.get((kind, underscored), ()))
+    for kinds, prefix, family_groups in LIBRARY_RESOURCE_FAMILIES:
+        if underscored.startswith(prefix) and (kinds is None or kind in kinds):
+            groups.extend(family_groups)
+    return tuple(groups)
+
+
 def _provided_by_dependency(a: ProjectAnalysis, kind: str, name: str) -> bool:
-    groups = LIBRARY_RESOURCE_NAMES.get((kind, name.replace(".", "_")), ())
+    """A library the project declares ships this resource. Without the declaration the reference
+    stays unresolved, including when a convention plugin might have added the library: that
+    limit is documented, and a name that nothing declares must not be excused on a guess."""
+    groups = _shipping_groups(kind, name)
     return any(
         declared == group or declared.startswith(group + ".")
         for declared in a.dependency_groups

@@ -647,6 +647,16 @@ LIBRARY_RESOURCE_NAMES: dict[tuple[str, str], tuple[str, ...]] = {
     ("id", "select_dialog_listview"): ("androidx.appcompat",),
     ("style", "FragmentScenarioEmptyFragmentActivityTheme"): ("androidx.fragment",),
 }
+# Families of library resources that share a name prefix: (resource types it covers, or None for
+# any type, prefix, Maven groups that ship it). Trusted like the exact names above: only when the
+# project declares one of the groups. The types matter: ``nav_default_*`` are animations, so a
+# *string* with that prefix is not the library's.
+LIBRARY_RESOURCE_FAMILIES: tuple[tuple[tuple[str, ...] | None, str, tuple[str, ...]], ...] = (
+    (None, "glance_", ("androidx.glance",)),
+    (None, "cardview_", ("androidx.cardview", "com.google.android.material")),
+    (("anim", "animator"), "nav_default_", ("androidx.navigation",)),
+    (None, "lb_", ("androidx.leanback",)),
+)
 # Compared against the underscore form of a name (``Theme.Material3.X`` -> ``Theme_Material3_X``).
 # A bare ``Theme_`` is NOT here: ``@style/Theme.MyApp`` is the app's own and must be defined.
 LIBRARY_STYLE_PREFIXES = (
