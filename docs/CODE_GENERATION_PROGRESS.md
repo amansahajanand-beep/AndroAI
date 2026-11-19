@@ -8,7 +8,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 1 | File-editing abstraction and patch engine | **Done, hardened (`5aea805`), verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
-| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, two real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10 caught). **4b not started**: manifest, navigation, dependencies, security, API usage, null safety, change-aware rules. |
+| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b not started**: manifest, navigation, dependencies, security, API usage, null safety, change-aware rules. |
 | 5 | New project generation | Not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
@@ -164,8 +164,9 @@ Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening a
 
 | Platform | Commit | `pytest packages/agent-core/codegen` | Ruff |
 |---|---|---|---|
-| Windows 10, Python 3.12.10, Git 2.56.1 | `ce547ad` (code of the latest commit) | **454 passed, 5 skipped, 1 xfailed** (about 1 min: the VCS tests spawn git) | `ruff check` clean; `ruff format --check` clean (53 files); `compileall` clean |
-| Linux (WSL Ubuntu, kernel 6.18 WSL2, Python 3.14.4, git 2.53.0, ext4), `git archive` export | `ce547ad` | **458 passed, 1 skipped, 1 xfailed** (about 15 s) | `ruff check` clean; `ruff format --check` clean (53 files); `compileall` clean |
+| Windows 10, Python 3.12.10, Git 2.56.1 | `8f20e01` (code of the latest commit) | **500 passed, 5 skipped, 1 xfailed** (about 1.3 min: the VCS tests spawn git) | `ruff check` clean; `ruff format --check` clean (58 files); `compileall` clean |
+| Linux (WSL Ubuntu, kernel 6.18 WSL2, Python 3.14.4, git 2.53.0, ext4), `git archive` export | `8f20e01` | **504 passed, 1 skipped, 1 xfailed** (about 24 s) | `ruff check` clean; `ruff format --check` clean (58 files); `compileall` clean |
+| Windows / Linux | `ce547ad` | 454 passed, 5 skipped, 1 xfailed / 458 passed, 1 skipped, 1 xfailed | clean (53 files) |
 | Linux (same) | `6dfb196` | 442 passed, 1 skipped | clean (52 files) |
 | Windows | `6dfb196` | 438 passed, 5 skipped | clean (52 files) |
 | Windows / Linux | `5aea805` | 410 passed, 5 skipped / 414 passed, 1 skipped | clean |
@@ -269,6 +270,66 @@ the genuine error is still reported):
 
 `nowinandroid` was re-run after these fixes and still reports 0 findings.
 
+### Phase 4a.5: project dependencies and a faster patch review
+
+**Gradle project dependencies** (`019f3df`). `project(":a:b")` (also Groovy `project(path: ':a:b')`,
+`project(':a', 'cfg')` and `testFixtures(project(...))`) and typesafe accessors `projects.a.b` (kebab-case
+`data-test` -> `dataTest`, nested) are resolved against the root `settings` includes into module directories
+(`ProjectAnalysis.project_dependencies`, `module_graph`). New rule `gradle.unknown_project` reports a dependency
+on a project that settings does not include, with a "did you mean". It only speaks when the project list is
+readable: not when settings is missing, has no includes, includes dynamically (`include(it)`) or remaps a
+`projectDir`; scripts of included builds and `buildSrc` are not checked against the main settings. Coverage was
+checked against an independent grep: `nowinandroid` 101 of 101 references resolved, AntennaPod 176 of 176.
+Catalog and string dependencies behave as before. Dependencies written as `buildSrc` constants
+(`implementation(Libs.MATERIAL)`, nested objects included) resolve to coordinates too (added for `iosched`).
+
+**`ReviewSession`** (`bf4c43a`). `review_patch` used to read every file and analyse the unchanged project for
+every patch. A session caches file texts by size and mtime (a file modified in the last 2 s is always re-read,
+like git's racily-clean rule), reuses the "before" analysis only while the project text is identical, keeps
+nothing from a patch, and is bound to one workspace, project id, config and target (`ValueError` otherwise).
+`review_patch(..., session=...)` uses it; without a session nothing changed. Measured on the same machine, 6
+sequential patch reviews, results identical to the stateless path:
+
+| Project | Stateless, per review | Session, first review | Session, later reviews |
+|---|---|---|---|
+| `nowinandroid` (715 files) | 4.8 to 5.3 s | 4.9 to 5.1 s | **2.5 to 2.6 s** |
+| `AntennaPod` (1,281 files) | 6.4 to 7.3 s | 6.5 to 6.7 s | **3.3 to 3.4 s** |
+| `iosched` (942 files) | 5.3 to 6.1 s | 5.4 s | **2.8 s** |
+
+About 2x. What remains is analysing the patched project (about 1.4 s) and the walk + stat that detects changes.
+Known blind spot: an edit that keeps size and mtime and is older than 2 s (`touch -r`).
+
+### Third real project: iosched (Hilt, Data Binding, buildSrc)
+
+`google/iosched` at `738e1e008096fad5f36612325275e80c33dbe436` (942 files: 419 Kotlin, 433 XML with 69 layouts, 48 of
+them Data Binding `<layout>`; Hilt; 9 modules; 9 manifests; dependencies as `buildSrc` constants, no version
+catalog, no Java). Read-only clone, byte-for-byte unchanged; fault injection used a copy.
+
+| Check | First run | After fixes |
+|---|---|---|
+| Findings | **15** blocking, all false positives | **0** |
+| Faults injected into real Kotlin/XML that 4a should catch (missing project and library import, typo import, missing brace, unterminated string, `R.string` and `@string` typos, duplicate class, duplicate string, unclosed layout tag) | not run | 10 of 10 |
+| Hilt/Dagger probes (removed `@AndroidEntryPoint` / `@Inject` import) | not run | 2 of 2 |
+| Data Binding probes | not run | `@{@string/missing}` caught; `<variable type="...Missing"/>` **not caught** (unsupported) |
+| Faults outside 4a (manifest permission, ghost activity, nonexistent buildSrc constant) | not run | 0 of 3, as expected; a nonexistent module is caught by the new rule |
+| CRLF copy | not run | identical findings |
+
+The 15 false positives and their fixes (`tests/test_review_realworld_hilt.py`, each with a twin):
+
+- Extension properties with a generic or star-projected receiver (`val Result<*>.succeeded`) were not
+  declarations (2).
+- A project function and a class of the same name imported together (`fun Rule.CoroutineScope()` and
+  `kotlinx.coroutines.CoroutineScope`), and same-named lowercase Kotlin imports (overloads), were reported as
+  conflicts (1). Two types of one name still conflict.
+- `dataStore.edit {}` demanded the SharedPreferences `edit` import although DataStore's own `edit` was
+  imported; any import of the name now satisfies the call (1).
+- Hilt output in class literals (`CustomTestRunner_Application::class`) is generated (1).
+- Dependencies declared as `buildSrc` constants hid the dependency that makes a library resource legitimate
+  (10 findings): `appbar_scrolling_view_behavior`, `google_play_services_version` and the fragment-testing theme.
+- `buildSrc` was counted as a module.
+
+`nowinandroid` (0) and AntennaPod (2) were re-run and are unchanged.
+
 Patch-engine hardening (commit `5aea805`). Found by reading the branches the tests did not reach (the `editing`
 package was at 95% line coverage) and reproducing each one. The regression tests were written first:
 `tests/test_editing_hardening.py` has 16 tests and 11 of them failed on the old code. The other 5 guard behaviour
@@ -342,12 +403,20 @@ Phase 2 (version control):
 
 Phase 4 (code review):
 
-- **Validated on two real projects** (`nowinandroid` and `AntennaPod`, see Verification): 0 and 2 findings (one
-  genuine, one documented limitation), 9 of 9 and 10 of 10 injected 4a faults caught. Two projects are not a
-  false-positive rate. The first runs produced 34 and 20 findings from 7 and 5 distinct patterns, and the second
-  project's patterns were mostly different from the first's, so a third project will probably have more. Still
-  untried: Dagger/Hilt-heavy and data-binding code, multi-flavor projects, Groovy `settings` with `projectDir`
-  overrides, Kotlin Multiplatform. Run more before trusting a blocking finding in production.
+- **Validated on three real projects** (`nowinandroid`, `AntennaPod`, `iosched`; see Verification): 0, 2 (one
+  genuine, one documented limitation) and 0 findings, with 9 of 9, 10 of 10 and 10 of 10 injected 4a faults
+  caught. Three projects are not a false-positive rate. The first runs produced 34, 20 and 15 findings from
+  7, 5 and 6 distinct patterns, and each project's patterns were largely different from the others', so a
+  fourth project will probably have more. Still untried: multi-flavor projects, Groovy `settings` with
+  `projectDir` overrides, Kotlin Multiplatform, Java-heavy code that uses Dagger, annotation-processor output
+  other than Hilt/Room/data binding. Run more before trusting a blocking finding in production.
+- **Data Binding is not analysed.** `<layout>` expressions and `<variable type="...">` / `<import type="...">`
+  are not checked, so a data-binding type that does not exist is not reported. Resource references inside
+  expressions (`@{@string/x}`) are.
+- **Dependencies are only read when they are literal.** Coordinates, catalog aliases (including bundles),
+  `project(...)`/`projects.x` and `buildSrc` `const val` constants are understood. Dependencies computed in
+  convention plugins, `subprojects { }` blocks or helper functions are invisible, so a library resource that
+  only such a dependency provides is reported as unresolved.
 - **Known false positive, left reported on purpose:** a nested type inherited from a library superclass
   (`class Bin extends NanoHTTPD { Response serve(...) }`, where `Response` is `NanoHTTPD.Response`) is reported
   as a missing import, because library classes are invisible to a static review. Excusing names inside classes
@@ -360,12 +429,12 @@ Phase 4 (code review):
   `setContent` inside `apply`/`run`/`with`; a package counts as library-provided only under framework roots, the
   curated library list or a declared dependency's group; `include(...)` paths are assumed to be directories
   (a `projectDir` override is not followed).
-- `review_patch` reloads and re-parses the whole project on every call (about 4.8 s on the 715-file
-  `nowinandroid`, 6.6 to 6.9 s on the 1,281-file AntennaPod; most of that is reading files), so a repair loop
-  that reviews many patches should not call it in a tight loop until the "before" analysis is cached.
-  Outstanding, not started.
-- Inter-module dependencies (`project(":x")`, `projects.x.y`, 103 of 250 dependency lines in `nowinandroid`) are
-  not modelled, only catalog and string coordinates.
+- Patch review is still about 2.5 to 3.4 s per patch with a `ReviewSession` (4.8 to 7.3 s without): analysing
+  the patched project is repeated for every patch. A per-file incremental analysis is not done. Plain
+  `review_patch` without a session still reloads everything on every call.
+- A dependency on a project that settings does not include is reported (`gradle.unknown_project`), but nothing
+  else uses the module graph yet: no cycle check, no "module X must not depend on Y", no check that a module
+  uses what it depends on.
 - **Not a compiler.** A name that is neither declared in the project nor in the curated list is never reported;
   type inference, overload resolution and most generics are out of reach. No finding does not mean it compiles.
 - The curated tables (about 250 names, a few dozen library mappings) only list names that really need an
@@ -389,7 +458,7 @@ Phase 4 (code review):
 Not done, and not part of 4a:
 
 - **Phase 4b** (manifest, navigation, dependency/Gradle, security, API-use, null-safety and change-aware rules).
-- **More real-project validation** (see Phase 4 limitations): two projects are done, more are needed before any
+- **More real-project validation** (see Phase 4 limitations): three projects are done, more are needed before any
   finding is allowed to block a patch in production.
 - **Review is not wired to checkpoints.** `review_patch` works on a `PatchEngine`; running a review against a
   `CheckpointManager` checkpoint is not implemented.
