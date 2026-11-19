@@ -7,6 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
 
+from .catalog import COMPONENT_BASES, KNOWN_PLUGIN_PREFIXES, TEST_SOURCE_SETS
 from .gradle import Dependency, GradleScript, VersionCatalog, parse_catalog
 from .models import ReviewConfig, ReviewTarget
 from .project import ProjectFiles
@@ -110,6 +111,12 @@ class ProjectDependency:
 def _camel(segment: str) -> str:
     """Gradle's typesafe accessor name of a project path segment: ``data-test`` -> ``dataTest``."""
     return re.sub(r"[-_]+([A-Za-z0-9])", lambda m: m.group(1).upper(), segment)
+
+
+def parse_version(text: str) -> tuple[int, ...] | None:
+    """``"2.0.21-1.0.28"`` -> ``(2, 0, 21)``; ``None`` if it does not start with a number."""
+    match = re.match(r"\d+(?:\.\d+)*", text.strip())
+    return tuple(int(part) for part in match.group(0).split(".")) if match else None
 
 
 def _resolve_class(name: str, package: str | None) -> str:
@@ -503,3 +510,145 @@ class ProjectAnalysis:
     @cached_property
     def has_build_scripts(self) -> bool:
         return bool(self.gradle_scripts)
+
+    # -- how much of the build we can read ----------------------------------------------------
+    #
+    # A rule may say "X is not declared" only if the build is readable enough that X would have
+    # been seen. These helpers answer that; they return None / False when it is not.
+
+    def module_scripts(self, module: str) -> list[GradleScript]:
+        prefix = f"{module}/" if module else ""
+        return [
+            script
+            for name in ("build.gradle.kts", "build.gradle")
+            if (script := self.gradle_scripts.get(prefix + name)) is not None
+        ]
+
+    def is_application(self, module: str) -> bool:
+        return any(
+            "com.android.application" in script.plugin_ids(self.catalog)
+            for script in self.module_scripts(module)
+        )
+
+    def opaque_plugins(self, script: GradleScript) -> bool:
+        """The script applies a plugin we do not understand (e.g. a convention plugin from
+        ``build-logic``), or one that the catalog cannot resolve. It may add dependencies or
+        enable features that are invisible here."""
+        known = self.catalog.plugins if self.catalog else {}
+        if any(alias not in known for alias, _line in script.plugin_aliases):
+            return True
+        return any(
+            not plugin.startswith(KNOWN_PLUGIN_PREFIXES)
+            for plugin in script.plugin_ids(self.catalog)
+        )
+
+    @cached_property
+    def shared_dependency_scope(self) -> bool:
+        """A script adds dependencies to other modules (``allprojects`` / ``subprojects``)."""
+        return any(
+            ("allprojects" in script.masked or "subprojects" in script.masked)
+            and bool(script.dependencies)
+            for script in self.gradle_scripts.values()
+        )
+
+    def dependency_groups_for(self, module: str | None) -> frozenset[str] | None:
+        """Maven groups declared by ``module`` and the modules it depends on, or ``None`` when
+        that list cannot be trusted to be complete (an unreadable dependency call, an unresolved
+        alias, a convention plugin, an unresolved project reference...)."""
+        if module is None or self.shared_dependency_scope or not self.has_build_scripts:
+            return None
+        memo: dict[str, frozenset[str] | None] = self.__dict__.setdefault("_groups_memo", {})
+        if module not in memo:  # rules ask once per source file; the answer is per module
+            memo[module] = self._dependency_groups(module)
+        return memo[module]
+
+    def _dependency_groups(self, module: str) -> frozenset[str] | None:
+        pending, seen, groups = [module], set(), set()
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            scripts = self.module_scripts(current)
+            if not scripts:
+                return None
+            if any(s.unparsed_dependency_calls or self.opaque_plugins(s) for s in scripts):
+                return None
+            paths = {s.path for s in scripts}
+            for resolved in self.dependencies:
+                dep = resolved.dep
+                if dep.path not in paths or dep.project or dep.project_accessor:
+                    continue
+                if resolved.group is None or "$" in resolved.group:
+                    return None
+                groups.add(resolved.group)
+            if any(d.source == current and d.target is None for d in self.project_dependencies):
+                return None
+            pending.extend(self.module_graph.get(current, ()))
+        return frozenset(groups)
+
+    @cached_property
+    def kotlin_version(self) -> tuple[int, ...] | None:
+        """The Kotlin Gradle plugin's version when it is written as a literal, else ``None``."""
+        found: dict[str, str] = {}
+        for script in self.gradle_scripts.values():
+            for plugin, version in script.plugin_versions.items():
+                found.setdefault(plugin, version)
+        if self.catalog:
+            for alias, plugin in self.catalog.plugins.items():
+                version = self.catalog.plugin_versions.get(alias)
+                if plugin and version:
+                    found.setdefault(plugin, version)
+        for plugin in (
+            "org.jetbrains.kotlin.android",
+            "org.jetbrains.kotlin.jvm",
+            "org.jetbrains.kotlin.multiplatform",
+        ):
+            if plugin in found:
+                return parse_version(found[plugin])
+        return None
+
+    def is_test_source(self, path: str) -> bool:
+        return self.source_set(path).startswith(TEST_SOURCE_SETS)
+
+    @cached_property
+    def component_classes(self) -> dict[str, tuple[str, str, int]]:
+        """Concrete Activity / Service / BroadcastReceiver classes of the app's own sources:
+        ``fqn -> (kind, path, line)``. A class counts if it extends a framework base (see
+        ``COMPONENT_BASES``) directly or through other project classes."""
+        by_simple: dict[str, list[TypeDecl]] = defaultdict(list)
+        located: dict[str, str] = {}
+        for path, source in self.sources.items():
+            if _BUILD_SOURCE.search(path):
+                continue
+            for decl in source.types:
+                by_simple[decl.name].append(decl)
+                located[decl.fqn] = path
+        memo: dict[str, str | None] = {}
+
+        def kind_of(decl: TypeDecl, depth: int = 0) -> str | None:
+            if decl.fqn in memo:
+                return memo[decl.fqn]
+            memo[decl.fqn] = None  # also breaks inheritance cycles
+            result = None
+            if depth < 20:
+                for supertype in decl.supertypes:
+                    name = supertype.rsplit(".", 1)[-1]
+                    for kind, bases in COMPONENT_BASES.items():
+                        if name in bases:
+                            result = kind
+                    candidates = by_simple.get(name, [])
+                    if result is None and len(candidates) == 1:
+                        result = kind_of(candidates[0], depth + 1)
+                    if result:
+                        break
+            memo[decl.fqn] = result
+            return result
+
+        found: dict[str, tuple[str, str, int]] = {}
+        for decls in by_simple.values():
+            for decl in decls:
+                kind = kind_of(decl)
+                if kind and not decl.abstract and not decl.private and decl.kind == "class":
+                    found[decl.fqn] = (kind, located[decl.fqn], decl.line)
+        return found

@@ -8,7 +8,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 1 | File-editing abstraction and patch engine | **Done, hardened (`5aea805`), verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
-| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b not started**: manifest, navigation, dependencies, security, API usage, null safety, change-aware rules. |
+| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). **4b-2 and 4b-3 not started**: navigation, security, API usage, null safety. |
 | 5 | New project generation | Not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
@@ -146,10 +146,47 @@ ReviewEngine().review(after, before=before)   # or review two project states dir
 | imports | missing import (project symbols, about 250 curated Android/Compose/AndroidX/Kotlin names, Compose extension functions, `.dp`/`.sp`, `by` state delegates, icons, coroutine builders); missing `R` import; unresolved project import (member imports and generated classes are accepted); conflicting / duplicate imports; duplicate class; unresolved `Foo::class` |
 | resources | unresolved `R.type.name` and `@type/name` with a "did you mean" hint; duplicate resources per directory; invalid resource names. Library, framework (`@android:`) and theme-attribute references are not flagged |
 
-**Not implemented yet (4b):** manifest rules, navigation, dependency/Gradle rules, security, incorrect API use,
-null safety, and the change-aware "unintended changes" rules (removed components/permissions/dependencies,
-package or application-id changes, language/UI conversions). Review against a checkpoint
-(`CheckpointManager`) is also not wired up.
+### Phase 4b-1: manifest, build and change-aware rules
+
+One principle runs through every rule below: **never claim what the build does not make readable.** A "X is
+not declared" finding is only made when X would have been seen. A convention plugin, a dependency call that
+cannot be parsed (`files(...)`, a loop variable), an unresolved catalog alias, an `allprojects { }` block or a
+`project(...)` that settings does not include each make the dependent rules silent for that module. This is
+why the rules produced no false positive on five real projects (see below), and it costs recall.
+
+| Rule id | Severity | Reports |
+|---|---|---|
+| `manifest.class_missing` | error | a declared component, application class or alias target that does not exist in the app's own packages. Fully qualified library classes, `${placeholder}` names and `tools:node="remove\|replace"` are skipped |
+| `manifest.component_undeclared` | error | an Activity / Service / Receiver (found by inheritance, abstract and test classes excluded) started with `Intent(ctx, X::class.java)` that no manifest declares |
+| `manifest.exported_missing` | error | an intent filter without `android:exported`; only when `targetSdk` >= 31 is a literal number |
+| `manifest.duplicate_component` | error | the same component declared twice in one manifest |
+| `manifest.permission_missing` | error | network, location, camera or audio API use without the permission. Only when every module's dependencies are readable, and never when a dependency from a group that may bring `INTERNET` (Firebase, Play services, ...) is present |
+| `manifest.no_launcher` | warning | an application module whose activities include no `MAIN` action |
+| `gradle.unknown_catalog_alias` | error | `libs.x.y` (library, plugin, version or bundle) that `libs.versions.toml` does not define, with a "did you mean" hint. Skipped with several or custom catalogs |
+| `gradle.dependency_missing` | error | an import from one of 19 well-known libraries (`LIB_DEPENDENCIES`) that no dependency of the module, or of the modules it depends on, provides. Compose is deliberately absent because it arrives transitively |
+| `gradle.compose_plugin_missing` | error | `buildFeatures { compose = true }` with a literal Kotlin version >= 2.0 and no `org.jetbrains.kotlin.plugin.compose` plugin |
+| `gradle.sdk_order` | warning | `minSdk > targetSdk` or `targetSdk > compileSdk` (literals in one script) |
+| `gradle.duplicate_dependency`, `gradle.conflicting_versions` | warning | the same coordinate twice in one configuration, with or without differing versions |
+| `gradle.unplanned_dependency` | error, approval `other_high_impact` | with `ReviewConfig.permitted_dependencies` set, any library outside the plan (entries: group, `group:artifact`, `group:*`) |
+| `change.component_removed`, `change.permission_removed`, `change.dependency_removed` | warning | something the project had before is gone. A component matches under any spelling of its class (relative or fully qualified), so a package rename is one finding. A dependency is "removed" only if its coordinate is declared nowhere in the project afterwards |
+| `change.integration_removed` | error, approval `remove_integration` | a payment or authentication dependency (`SENSITIVE_DEPENDENCY_GROUPS`) disappeared |
+| `change.package_renamed` | error, approval `rename_package` | `applicationId`, `namespace` or the manifest `package` changed |
+| `change.language_converted` | error, approval `convert_language` | a `.java` file replaced by a `.kt` file of the same name, or the reverse |
+| `change.ui_toolkit_converted` | error, approval `convert_ui_toolkit` | a file that built its screen from XML layouts now uses Compose, or the reverse (judged per file, and only if it stopped using the old toolkit) |
+| `change.tests_removed` | warning | fewer `@Test` methods in total than before (moving a test between files is not reported) |
+| `change.sdk_changed` | warning | `minSdk` raised, or `targetSdk` / `compileSdk` lowered |
+| `change.component_exported` | warning | a component without an intent filter became exported |
+
+Findings that carry an `approval` are downgraded to non-blocking info ("(approved)") when `ReviewConfig.granted_approvals`
+contains that kind, exactly as in the proposed contract. The change-aware rules only run when a "before" state
+exists (a patch review or a checkpoint review) and only look at files that differ between the two states.
+
+**Review against a checkpoint** (new): `review_since_checkpoint(manager, checkpoint_id)` takes the project as it is
+now, rebuilds it as it was at the checkpoint from the shadow-git history (only the files that differ are read
+back) and reports what changed since, including edits nobody recorded yet. `project_at_checkpoint` exposes the
+rebuilt project. Nothing is written to the workspace or the history.
+
+**Not implemented yet (4b-2 and 4b-3):** navigation, security, incorrect API use and null safety.
 
 ## Generation workflow, supported technologies, repair rules
 
@@ -160,10 +197,12 @@ The patch engine is language-agnostic: it edits UTF-8 text files and knows nothi
 
 ## Verification
 
-Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening and the real-project fixes).
+Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening, the real-project fixes and 4b-1).
 
 | Platform | Commit | `pytest packages/agent-core/codegen` | Ruff |
 |---|---|---|---|
+| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4b-1 (the commit that added this row) | **576 passed, 5 skipped, 1 xfailed** (about 2 min) | `ruff check` clean; `ruff format --check` clean (64 files); `compileall` clean |
+| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4b-1 | **580 passed, 1 skipped, 1 xfailed** (about 27 s) | `ruff check` clean; `ruff format --check` clean (64 files) |
 | Windows 10, Python 3.12.10, Git 2.56.1 | `8f20e01` (code of the latest commit) | **500 passed, 5 skipped, 1 xfailed** (about 1.3 min: the VCS tests spawn git) | `ruff check` clean; `ruff format --check` clean (58 files); `compileall` clean |
 | Linux (WSL Ubuntu, kernel 6.18 WSL2, Python 3.14.4, git 2.53.0, ext4), `git archive` export | `8f20e01` | **504 passed, 1 skipped, 1 xfailed** (about 24 s) | `ruff check` clean; `ruff format --check` clean (58 files); `compileall` clean |
 | Windows / Linux | `ce547ad` | 454 passed, 5 skipped, 1 xfailed / 458 passed, 1 skipped, 1 xfailed | clean (53 files) |
@@ -347,6 +386,32 @@ that was already correct.
 3. **`journal.json` holding valid JSON that is not an object** (`[]`, `null`, `123`) crashed with
    `AttributeError`. It now raises `JournalError`.
 
+### Phase 4b-1 verification
+
+- **76 new tests** (manifest 30, Gradle 20, change-aware 20, checkpoint 6). The known-good sample project still
+  reports nothing under any of the 23 new rules, and none of the 500 earlier tests changed except one fixture
+  (an old test imported DataStore into an app that does not depend on it, which the new rule correctly reported;
+  the fixture now declares the dependency).
+- **Mutation check: 57 of 57 caught.** Each mutation breaks one piece of a rule (a guard, an exclusion, a
+  severity, an approval kind) and must make a test fail. The first run caught 49 of 56; the survivors were real:
+  missing tests for a double report on an alias, a class literal outside an `Intent`, `libs.findLibrary`, an
+  unresolved plugin alias, an unresolved project dependency and a component that was already exported, and one
+  **real design flaw**: components were identified relative to the package, which made a fully qualified name
+  look "removed" when only the package changed. Components now match under any spelling of their class.
+- **Real projects, no injected faults (5 clones):** the manifest, `dependency_missing` and catalog rules reported
+  nothing. `nowinandroid`, `iosched` and `sunflower` have no module whose dependency list is fully readable
+  (convention plugins, constants), so the rules that need one are silent there by design. The only new findings
+  were three `gradle.duplicate_dependency` warnings, all **true**: `iosched` declares `ARCH_TESTING` twice in
+  `shared`, and two constants for the same `compose-theme-adapter` coordinate in `mobile`; one `p2` module declares
+  `lifecycle-runtime-ktx` twice.
+- **Real projects, faults injected in memory (43 faults, 5 projects): 38 caught, 5 silent.** Caught: renamed or
+  ghost component, undeclared activity started through an `Intent`, catalog typo, library imported without its
+  dependency (in readable modules), changed `applicationId`, deleted test file, Java file converted to Kotlin,
+  permission removed. Silent, each for a known reason: `android:exported` dropped (3 projects whose `targetSdk`
+  is a constant, not a literal) and one dependency line deleted (2 projects where the same library is declared in
+  other modules too). In all five projects the missing-INTERNET fault was caught only by `change.permission_removed`:
+  `manifest.permission_missing` stayed silent because some module's dependencies are not fully readable.
+
 ### Platform coverage (Windows and Linux together)
 
 Some tests can only run on one operating system, so each platform skips some. Together they cover all 415 tests:
@@ -445,23 +510,55 @@ Phase 4 (code review):
 - Multi-module projects are treated as one: resources and dependencies are looked up project-wide (permissive).
 - Resource types a library may legitimately provide (`style`, and names with library prefixes) are skipped, so
   a typo in such a name is not caught.
-- **Only three rule groups run** (`syntax`, `imports`, `resources`; 12 rule ids). The analysis layer already parses
-  the manifest (package, permissions, components, launcher), Gradle scripts and the version catalog, and resolves
-  dependency aliases, but **no rule uses that data yet**: nothing checks the manifest, navigation, dependencies,
-  permissions or security. `rules/changes.py` is a placeholder that returns nothing, so there is no "this patch
-  removed a component / permission / dependency" check. There is no language or framework detector.
-- A review report with no findings therefore says nothing about the manifest, permissions, dependencies or
-  navigation. It must not be presented as "the project is safe".
+- **Six rule groups run** (`syntax`, `imports`, `resources`, `gradle`, `manifest` and, with a "before" state,
+  `changes`; 36 rule ids). Nothing checks navigation, security, incorrect API use or null safety yet (4b-2 and
+  4b-3), and there is no language or framework detector.
+- A review report with no findings therefore says nothing about navigation, security or API use. It must not be
+  presented as "the project is safe".
+
+Phase 4b-1 (manifest, build and change-aware rules):
+
+- **Recall is deliberately limited by readability.** `gradle.dependency_missing` and `manifest.permission_missing`
+  need a module's whole dependency list, so they are silent for any module that applies a convention plugin or
+  has a dependency call that cannot be parsed. `manifest.permission_missing` further needs *every* module to be
+  readable, so on real multi-module projects it usually does not fire (it was silent on all five clones).
+  `manifest.exported_missing` and `gradle.compose_plugin_missing` need a literal `targetSdk` / Kotlin version, and
+  a constant or a convention plugin silences them (3 of 5 clones). Readable single-module projects, which is what
+  generation produces, get the full set.
+- `change.dependency_removed` is judged project-wide: removing a library from one module while another module
+  still declares it is not reported. Moving a dependency between modules is therefore not noise, and a real
+  removal from one module can be missed.
+- `gradle.dependency_missing` knows 19 libraries (`LIB_DEPENDENCIES`). Anything else, and everything in Compose,
+  is not checked. It also accepts the library from any configuration, so `testImplementation` satisfies a `main`
+  import.
+- Permission rules cover network, location, camera and audio only, by import (and, for `LocationManager` and
+  `MediaRecorder`, by call). Other dangerous permissions, runtime permission requests and `uses-permission`
+  entries that are unused are not checked.
+- `manifest.component_undeclared` only sees classes started through `Intent(ctx, X::class.java)` (Kotlin and Java
+  literals). A component started by name, through a library, or from XML is not seen.
+- `change.ui_toolkit_converted` judges one file at a time: it needs a file that stopped using `R.layout` /
+  view binding and started using `setContent { }` or `@Composable` (or the reverse). A conversion spread over
+  several files, or one that keeps a single XML reference, is not reported. `change.language_converted` needs the
+  same file name in the same directory.
+- `gradle.sdk_order` is a warning because the exact behaviour of the Android Gradle plugin for out-of-order levels
+  was not verified against a build. `gradle.compose_plugin_missing` states what the Kotlin 2.0 Compose compiler
+  plugin requires; it was not checked against a real failing build either. Nothing in 4b was compiled.
+- **Known false positives from the older 4a rules, found while validating 4b on two projects that were not in the
+  4a validation set, `sunflower` and Android's `platform-samples` (not fixed, not part of 4b):** `resource.unresolved` for resources shipped by libraries
+  (`glance_default_loading_layout` and `glance_appwidget_available` from Glance, `cardview_shadow_start_color`
+  from CardView, the `nav_default_*_anim` animators from Navigation: 17 findings in one project), and
+  `import.conflicting` when one name is a class and the other an extension property
+  (`android.provider.Settings` and the `Icons.Rounded.Settings` icon). `import.missing` for `items` (sunflower) and
+  `Surface` (p2) were not investigated.
 
 ## Unfinished integration work
 
-Not done, and not part of 4a:
+Not done:
 
-- **Phase 4b** (manifest, navigation, dependency/Gradle, security, API-use, null-safety and change-aware rules).
-- **More real-project validation** (see Phase 4 limitations): three projects are done, more are needed before any
-  finding is allowed to block a patch in production.
-- **Review is not wired to checkpoints.** `review_patch` works on a `PatchEngine`; running a review against a
-  `CheckpointManager` checkpoint is not implemented.
+- **Phase 4b-2 and 4b-3** (navigation, security, API-use and null-safety rules).
+- **More real-project validation** (see Phase 4 limitations): five projects have been reviewed in total, and the
+  older rules still showed false positives on two of the newer ones; more are needed before any finding is
+  allowed to block a patch in production.
 - **No worker integration.** `workers/ai-agent` does not import `androai_codegen`; nothing consumes `CodingTask`,
   and `ReviewReport` is not mapped to the contract's `ReviewFinding` (the field names already match).
 - **Contracts** are still a proposal awaiting Persons 2 and 4. **CI** does not install or test codegen, and the

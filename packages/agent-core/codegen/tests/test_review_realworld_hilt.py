@@ -140,13 +140,23 @@ EDIT_CALL = "class Store(private val store: Any) { suspend fun save() { store.ed
 
 
 def test_a_call_is_provided_by_any_import_of_that_name():
-    # DataStore's own `edit` extension, not the SharedPreferences one the catalog expects.
+    # DataStore's own `edit` extension, not the SharedPreferences one the catalog expects. The app
+    # really depends on DataStore here, so only the import resolution is under test.
+    with_datastore = broken(
+        {
+            APP_GRADLE: (
+                CORE_KTX,
+                CORE_KTX + '    implementation("androidx.datastore:datastore-preferences:1.1.1")\n',
+            )
+        }
+    )
     files = with_files(
         {
             f"{MAIN}/Store.kt": kotlin(
                 "com.example.todo", "import androidx.datastore.preferences.core.edit", "", EDIT_CALL
             )
-        }
+        },
+        base=with_datastore,
     )
     assert found(files) == []
 

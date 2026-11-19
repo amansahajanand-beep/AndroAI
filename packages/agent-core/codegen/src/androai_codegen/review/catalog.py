@@ -668,3 +668,145 @@ LIBRARY_STYLE_PREFIXES = (
     "AlertDialog_",
     "Dialog",
 )
+
+
+# --- Phase 4b: manifest, build and change knowledge ---------------------------------------------
+
+# Simple names of the framework / library base classes that make a project class an Android
+# component. A subclass of any of these (directly or through other project classes) is one.
+COMPONENT_BASES: dict[str, frozenset[str]] = {
+    "activity": frozenset(
+        """Activity ComponentActivity AppCompatActivity FragmentActivity ListActivity
+        PreferenceActivity NativeActivity AccountAuthenticatorActivity ExpandableListActivity
+        LauncherActivity TabActivity""".split()
+    ),
+    "service": frozenset(
+        """Service IntentService JobIntentService LifecycleService JobService
+        MediaBrowserServiceCompat MediaBrowserService MediaSessionService MediaLibraryService
+        FirebaseMessagingService NotificationListenerService AccessibilityService
+        InputMethodService WallpaperService HostApduService RemoteViewsService
+        VpnService DreamService TileService""".split()
+    ),
+    "receiver": frozenset(
+        """BroadcastReceiver AppWidgetProvider DeviceAdminReceiver WakefulBroadcastReceiver""".split()
+    ),
+}
+
+# Plugin ids (or prefixes) whose effect on the build is understood and adds no dependencies of
+# its own. Any other plugin (a convention plugin, a vendor plugin) may add dependencies, apply
+# further plugins or enable features we cannot see, so rules that need the *complete* picture of
+# a module stay silent for it.
+KNOWN_PLUGIN_PREFIXES = (
+    "com.android.",
+    "org.jetbrains.kotlin.",
+    "kotlin-android",
+    "kotlin-kapt",
+    "kotlin-parcelize",
+    "kotlinx-serialization",
+    "com.google.devtools.ksp",
+    "com.google.dagger.hilt.android",
+    "dagger.hilt.android.plugin",
+    "com.google.gms.google-services",
+    "com.google.firebase.crashlytics",
+    "com.google.firebase.firebase-perf",
+    "androidx.navigation.safeargs",
+    "androidx.room",
+    "androidx.baselineprofile",
+    "com.google.protobuf",
+    "com.google.android.libraries.mapsplatform.secrets-gradle-plugin",
+    "io.gitlab.arturbosch.detekt",
+    "com.diffplug.spotless",
+    "org.jlleitschuh.gradle.ktlint",
+    "org.gradle.",
+    "java",
+    "java-library",
+    "application",
+    "maven-publish",
+    "signing",
+    "idea",
+    "base",
+    "jacoco",
+    "checkstyle",
+    "pmd",
+)
+
+# A dependency from one of these groups may bring in the INTERNET permission through its own
+# manifest, so a project that uses one cannot be said to lack it.
+INTERNET_PROVIDING_GROUPS = (
+    "com.google.firebase",
+    "com.google.android.gms",
+    "com.google.android.play",
+    "com.google.android.libraries",
+    "com.google.android.ump",
+    "com.google.mlkit",
+    "com.facebook",
+    "com.amazonaws",
+    "io.sentry",
+    "com.mapbox",
+    "com.onesignal",
+    "com.adjust",
+    "com.appsflyer",
+    "com.segment",
+    "com.mixpanel",
+    "com.microsoft.appcenter",
+    "com.bugsnag",
+    "org.matomo",
+)
+
+
+@dataclass(frozen=True)
+class PermissionUse:
+    """An API that fails at run time (``SecurityException``) unless a permission is declared."""
+
+    label: str
+    needs_any_of: tuple[str, ...]  # declaring any one of these is enough
+    imports: tuple[str, ...] = ()  # importing one of these means the API is used
+    import_and_call: tuple[tuple[str, str], ...] = ()  # (import, regex of the call)
+
+
+PERMISSION_USES: tuple[PermissionUse, ...] = (
+    PermissionUse(
+        "network access",
+        ("android.permission.INTERNET",),
+        imports=(
+            "retrofit2",
+            "okhttp3",
+            "io.ktor.client",
+            "com.android.volley",
+            "java.net.HttpURLConnection",
+            "javax.net.ssl.HttpsURLConnection",
+        ),
+    ),
+    PermissionUse(
+        "location access",
+        ("android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"),
+        imports=(
+            "com.google.android.gms.location.FusedLocationProviderClient",
+            "com.google.android.gms.location.LocationServices",
+        ),
+        import_and_call=(
+            (
+                "android.location.LocationManager",
+                r"\b(?:getLastKnownLocation|requestLocationUpdates|requestSingleUpdate)\s*\(",
+            ),
+        ),
+    ),
+    PermissionUse(
+        "camera access",
+        ("android.permission.CAMERA",),
+        imports=(
+            "androidx.camera",
+            "android.hardware.camera2.CameraManager",
+            "android.hardware.Camera",
+        ),
+    ),
+    PermissionUse(
+        "audio recording",
+        ("android.permission.RECORD_AUDIO",),
+        imports=("android.media.AudioRecord", "android.speech.SpeechRecognizer"),
+        import_and_call=(("android.media.MediaRecorder", r"\bsetAudioSource\s*\("),),
+    ),
+)
+
+# Source sets that are not part of the shipped app: their API use needs no manifest permission.
+TEST_SOURCE_SETS = ("test", "androidTest", "testFixtures", "sharedTest")

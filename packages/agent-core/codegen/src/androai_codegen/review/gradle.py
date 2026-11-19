@@ -47,6 +47,10 @@ _INCLUDE = re.compile(r"(?<![\w.])include\b[ \t]*\(?")
 _INCLUDE_BUILD = re.compile(r"(?<![\w.])includeBuild\b[ \t]*\(")
 _CATALOG_CREATE = re.compile(r"(?<![\w.])create[ \t]*\([ \t]*")
 _FROM_FILES = re.compile(r"(?<![\w.])from[ \t]*\([ \t]*files[ \t]*\(")
+_KOTLIN_DEP = re.compile(r"(?<![\w.])kotlin[ \t]*\([ \t]*")
+_IGNORED_DEP = re.compile(r"(?:gradleApi|localGroovy|gradleKotlinDsl)[ \t]*\(")
+_COMPOSE_ON = re.compile(r"(?<![\w.])compose[ \t]*(?:=[ \t]*)?true\b")
+_VERSION_AFTER = re.compile(r"[ \t]*\)?[ \t]*version[ \t]*\(?[ \t]*")
 
 
 @dataclass(frozen=True)
@@ -72,6 +76,8 @@ class Dependency:
 class VersionCatalog:
     libraries: dict[str, tuple[str | None, str | None, str | None]] = field(default_factory=dict)
     plugins: dict[str, str | None] = field(default_factory=dict)
+    plugin_versions: dict[str, str | None] = field(default_factory=dict)  # alias -> version
+    version_values: dict[str, str] = field(default_factory=dict)  # [versions] name -> literal
     versions: set[str] = field(default_factory=set)
     bundles: set[str] = field(default_factory=set)
     bundle_members: dict[str, tuple[str, ...]] = field(default_factory=dict)  # bundle -> libraries
@@ -106,9 +112,22 @@ def parse_catalog(text: str) -> VersionCatalog:
             raw = value.get("version")
             version = raw if isinstance(raw, str) else (raw or {}).get("ref") if raw else None
         catalog.libraries[_accessor(key)] = (group, name or None, version)
+    for key, value in (data.get("versions") or {}).items():
+        if isinstance(value, str):
+            catalog.version_values[key] = value
     for key, value in (data.get("plugins") or {}).items():
         plugin_id = value if isinstance(value, str) else (value or {}).get("id")
         catalog.plugins[_accessor(key)] = plugin_id.split(":")[0] if plugin_id else None
+        if isinstance(value, str):
+            catalog.plugin_versions[_accessor(key)] = (
+                value.split(":")[1] if value.count(":") else None
+            )
+        elif isinstance(value, dict):
+            raw = value.get("version")
+            ref = raw.get("ref") if isinstance(raw, dict) else None
+            catalog.plugin_versions[_accessor(key)] = (
+                catalog.version_values.get(ref) if ref else raw if isinstance(raw, str) else None
+            )
     catalog.versions = {_accessor(k) for k in (data.get("versions") or {})}
     for key, members in (data.get("bundles") or {}).items():
         names = tuple(_accessor(m) for m in members if isinstance(m, str)) if members else ()
@@ -214,6 +233,23 @@ class GradleScript:
                     )
                 )
                 continue
+            kotlin = _KOTLIN_DEP.match(self.masked, offset)
+            if kotlin:
+                module = self._string_after(kotlin.end())
+                if module:
+                    found.append(
+                        Dependency(
+                            config,
+                            "org.jetbrains.kotlin",
+                            f"kotlin-{module.split(':')[0]}",
+                            None,
+                            None,
+                            self.path,
+                            line,
+                            is_platform,
+                        )
+                    )
+                continue
             ref = re.compile(r"libs((?:\.[A-Za-z_]\w*)+)").match(self.masked, offset)
             if ref:
                 found.append(
@@ -228,6 +264,42 @@ class GradleScript:
                         is_platform,
                     )
                 )
+        return found
+
+    @cached_property
+    def unparsed_dependency_calls(self) -> int:
+        """Dependency-configuration calls we could not read (a loop variable, ``files(...)``, a
+        computed string...). Where this is non-zero the dependency list is incomplete, so a rule
+        must not conclude that something is *not* declared."""
+        total = 0
+        for match in _DEPENDENCY.finditer(self.masked):
+            if not _IGNORED_DEP.match(self.masked, match.end()):
+                total += 1
+        return max(0, total - len(self.dependencies))
+
+    @cached_property
+    def compose_enabled(self) -> int | None:
+        """Line of ``buildFeatures { compose = true }``, if present."""
+        match = _COMPOSE_ON.search(self.masked)
+        return self.line(match.start()) if match else None
+
+    @cached_property
+    def plugin_versions(self) -> dict[str, str]:
+        """Plugin id -> literal version (``id("x") version "1"``, ``kotlin("jvm") version "1"`` or
+        a ``classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22")`` dependency)."""
+        found: dict[str, str] = {}
+        for pattern, prefix in ((_PLUGIN_ID, ""), (_KOTLIN_PLUGIN, "org.jetbrains.kotlin.")):
+            for match in pattern.finditer(self.masked):
+                literal = self.lexed.string_starting_at(match.end())
+                if literal is None or not literal.terminated:
+                    continue
+                tail = _VERSION_AFTER.match(self.masked, literal.end)
+                version = self._string_after(tail.end()) if tail else None
+                if version:
+                    found[prefix + self.lexed.string_value(literal)] = version
+        for dep in self.dependencies:
+            if dep.artifact == "kotlin-gradle-plugin" and dep.version:
+                found.setdefault("org.jetbrains.kotlin.android", dep.version)
         return found
 
     def _string_arguments(self, offset: int) -> list[str]:
