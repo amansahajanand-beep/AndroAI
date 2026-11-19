@@ -8,7 +8,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 1 | File-editing abstraction and patch engine | **Done, hardened (`5aea805`), verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
-| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, one real project (`nowinandroid`: 0 false findings, 9 of 9 injected faults caught). **4b not started**: manifest, navigation, dependencies, security, API usage, null safety, change-aware rules. |
+| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, two real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10 caught). **4b not started**: manifest, navigation, dependencies, security, API usage, null safety, change-aware rules. |
 | 5 | New project generation | Not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
@@ -164,12 +164,19 @@ Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening a
 
 | Platform | Commit | `pytest packages/agent-core/codegen` | Ruff |
 |---|---|---|---|
-| Windows 10, Python 3.12.10, Git 2.56.1 | latest (real-project fixes, see below) | **438 passed, 5 skipped** (about 1 min: the VCS tests spawn git) | `ruff check` clean; `ruff format --check` clean (52 files); `compileall` clean |
-| Windows (same) | `5aea805` | 410 passed, 5 skipped | clean (50 files) |
-| Linux (WSL Ubuntu, Python 3.14.4, ext4), exported copy | `5aea805` | **414 passed, 1 skipped** | `ruff check` clean |
+| Windows 10, Python 3.12.10, Git 2.56.1 | `ce547ad` (code of the latest commit) | **454 passed, 5 skipped, 1 xfailed** (about 1 min: the VCS tests spawn git) | `ruff check` clean; `ruff format --check` clean (53 files); `compileall` clean |
+| Linux (WSL Ubuntu, kernel 6.18 WSL2, Python 3.14.4, git 2.53.0, ext4), `git archive` export | `ce547ad` | **458 passed, 1 skipped, 1 xfailed** (about 15 s) | `ruff check` clean; `ruff format --check` clean (53 files); `compileall` clean |
+| Linux (same) | `6dfb196` | 442 passed, 1 skipped | clean (52 files) |
+| Windows | `6dfb196` | 438 passed, 5 skipped | clean (52 files) |
+| Windows / Linux | `5aea805` | 410 passed, 5 skipped / 414 passed, 1 skipped | clean |
 
-The Linux run predates the real-project fixes and has **not been repeated** for the latest commit; the 28 new
-review tests are pure Python and platform independent, but that is an expectation, not a measurement.
+The Linux commands were: `git archive` of the commit, `tar -xf` into a fresh directory on ext4,
+`python3 -m venv --without-pip`, pip bootstrapped from the bundled wheel, `pip install -e packages/contracts -e
+"packages/agent-core/codegen[dev]"`, then `pytest -q -rs`, `ruff check .`, `ruff format --check .` and
+`python -m compileall -q src tests`, all from `packages/agent-core/codegen`; every step exited 0. The only Linux
+skip is the Windows-only NTFS-junction test; the 4 tests that skip on Windows (permission bits, NTFS-only names,
+symlinks) pass on Linux. The documentation-only commit after `ce547ad` does not change any tested file.
+The `xfailed` is a strict expected failure that records a known limitation (see Phase 4 limitations).
 
 | Other check | Result |
 |---|---|
@@ -230,6 +237,37 @@ still reported, in `tests/test_review_realworld.py`):
 - A comment-only license-header XML outside `res/` and the manifest reported as malformed (1).
 - Gradle facts for later rules: catalog bundles, `create("libs") { from(files(...)) }` counted as a custom
   catalog, and included builds (`build-logic`) and the root counted as modules.
+
+### Second real project: AntennaPod
+
+`AntennaPod/AntennaPod` at `c45496d` (1,281 files: 614 Java, 14 Kotlin, 425 XML, 118 layouts; Groovy Gradle with a
+version catalog; 37 modules; 11 manifests; no Compose, no navigation graph). Chosen because it is nearly the
+opposite of `nowinandroid`: Java-heavy, Groovy DSL, XML views, Play Services. Read-only clone, byte-for-byte
+unchanged afterwards; fault injection used a copy.
+
+| Check | First run | After fixes |
+|---|---|---|
+| Findings | **20** (19 blocking): 18 false positives, 1 genuine duplicate import (warning), 1 inherited-nested-type case | **2** (the genuine duplicate import and the documented limitation) |
+| Parsed facts | 37 modules, 37 namespaces from Gradle, 68 catalog libraries, 280 dependencies, 11 manifests with launcher, permissions and components | unchanged |
+| Faults injected into real Java/XML that 4a should catch (missing project and library import, typo import, missing brace, unterminated string, `R.string` typo in Java, `@string` typo in a layout, duplicate class, duplicate string, unclosed layout tag) | not run | 10 of 10 |
+| Faults outside 4a (manifest permission and ghost activity, nonexistent catalog alias and module, nonexistent method, type mismatch) | not run | 0 of 6, as expected (4b or a compiler's job) |
+| CRLF copy of the whole project | not run | identical findings; a patch review of a CRLF file with an LF edit works |
+| Patch review (removed import, benign comment) | not run | blocked / applicable; workspace byte-identical afterwards |
+
+The false positives and their fixes (tests in `tests/test_review_realworld_java.py`, each with a twin that proves
+the genuine error is still reported):
+
+- `resValue "string", "app_name", ...` in Gradle defines a resource (6 findings); declaring it per build type is
+  not a duplicate.
+- Library resources with no telltale prefix (7): `appbar_scrolling_view_behavior`,
+  `google_play_services_version`, `recycler_view`, `select_dialog_listview`. A small `(type, name)` table is
+  trusted **only when the project declares the providing Maven group**.
+- `<attr name="x"/>` without a format inside `<declare-styleable>` is a reference, not a second definition (2).
+- Tool XML with a DOCTYPE outside `res/` and the manifest, such as `checkstyle.xml` (2), is not a project syntax
+  error; it stays listed in `files_unparsed`. Inside `res/` or the manifest it is still reported.
+- Enum constants read as uses of a library type (1): `enum ViewType { Section, Header }`.
+
+`nowinandroid` was re-run after these fixes and still reports 0 findings.
 
 Patch-engine hardening (commit `5aea805`). Found by reading the branches the tests did not reach (the `editing`
 package was at 95% line coverage) and reproducing each one. The regression tests were written first:
@@ -304,17 +342,28 @@ Phase 2 (version control):
 
 Phase 4 (code review):
 
-- **Validated on one real project only** (`nowinandroid`, see Verification): zero findings on code that
-  compiles, 9 of 9 injected 4a faults caught. One project is not a false-positive rate. Its first run produced 34
-  false blocking findings from a handful of patterns, so other projects will have patterns not seen yet; run
-  more real projects (different DSL, Java, XML views, Groovy, Dagger/Room generated code) before trusting a
-  blocking finding in production.
+- **Validated on two real projects** (`nowinandroid` and `AntennaPod`, see Verification): 0 and 2 findings (one
+  genuine, one documented limitation), 9 of 9 and 10 of 10 injected 4a faults caught. Two projects are not a
+  false-positive rate. The first runs produced 34 and 20 findings from 7 and 5 distinct patterns, and the second
+  project's patterns were mostly different from the first's, so a third project will probably have more. Still
+  untried: Dagger/Hilt-heavy and data-binding code, multi-flavor projects, Groovy `settings` with `projectDir`
+  overrides, Kotlin Multiplatform. Run more before trusting a blocking finding in production.
+- **Known false positive, left reported on purpose:** a nested type inherited from a library superclass
+  (`class Bin extends NanoHTTPD { Response serve(...) }`, where `Response` is `NanoHTTPD.Response`) is reported
+  as a missing import, because library classes are invisible to a static review. Excusing names inside classes
+  that extend library types would also hide a missing `Context` import in every `Fragment`, which is far more
+  common. A strict-xfail test records it; it fails loudly if the behaviour ever changes.
+- The library-resource table (`LIBRARY_RESOURCE_NAMES`, 4 entries) is curated by hand and each entry is only
+  trusted when its Maven group is declared. Other library-provided resources without a known prefix are still
+  reported as unresolved.
 - Heuristics added for real code are deliberately narrow: implicit-receiver calls are only excused for
   `setContent` inside `apply`/`run`/`with`; a package counts as library-provided only under framework roots, the
   curated library list or a declared dependency's group; `include(...)` paths are assumed to be directories
   (a `projectDir` override is not followed).
-- `review_patch` reloads and re-parses the whole project on every call (about 4.8 s on 715 files), so a repair
-  loop that reviews many patches should not call it in a tight loop until the "before" analysis is cached.
+- `review_patch` reloads and re-parses the whole project on every call (about 4.8 s on the 715-file
+  `nowinandroid`, 6.6 to 6.9 s on the 1,281-file AntennaPod; most of that is reading files), so a repair loop
+  that reviews many patches should not call it in a tight loop until the "before" analysis is cached.
+  Outstanding, not started.
 - Inter-module dependencies (`project(":x")`, `projects.x.y`, 103 of 250 dependency lines in `nowinandroid`) are
   not modelled, only catalog and string coordinates.
 - **Not a compiler.** A name that is neither declared in the project nor in the curated list is never reported;
@@ -340,7 +389,7 @@ Phase 4 (code review):
 Not done, and not part of 4a:
 
 - **Phase 4b** (manifest, navigation, dependency/Gradle, security, API-use, null-safety and change-aware rules).
-- **More real-project validation** (see Phase 4 limitations): one project is done, more are needed before any
+- **More real-project validation** (see Phase 4 limitations): two projects are done, more are needed before any
   finding is allowed to block a patch in production.
 - **Review is not wired to checkpoints.** `review_patch` works on a `PatchEngine`; running a review against a
   `CheckpointManager` checkpoint is not implemented.
