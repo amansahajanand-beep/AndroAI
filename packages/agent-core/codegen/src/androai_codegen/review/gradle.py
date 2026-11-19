@@ -35,6 +35,12 @@ _APPLY_PLUGIN = re.compile(r"\bapply[ \t]+plugin[ \t]*:[ \t]*")
 _KOTLIN_PLUGIN = re.compile(r"(?<![\w.])kotlin[ \t]*\([ \t]*")
 _PLUGIN_ALIAS = re.compile(r"(?<![\w.])alias[ \t]*\([ \t]*libs\.plugins((?:\.[A-Za-z_]\w*)+)")
 _ARTIFACT_MAP = re.compile(r"\bgroup[ \t]*[:=]")
+_PROJECT_CALL = re.compile(
+    r"(?:testFixtures[ \t]*\([ \t]*)?project[ \t]*\([ \t]*(?:path[ \t]*[:=][ \t]*)?"
+)
+_PROJECT_ACCESSOR = re.compile(
+    r"(?:testFixtures[ \t]*\([ \t]*)?projects((?:\.[A-Za-z_]\w*)+)(?![\w(])"
+)
 _RES_VALUE = re.compile(r"(?<![\w.])resValue\b[ \t]*\(?[ \t]*")
 _INCLUDE = re.compile(r"(?<![\w.])include\b[ \t]*\(?")
 _INCLUDE_BUILD = re.compile(r"(?<![\w.])includeBuild\b[ \t]*\(")
@@ -52,6 +58,8 @@ class Dependency:
     path: str
     line: int
     is_platform: bool = False
+    project: str | None = None  # ``project(":core:data")``: the project path as written
+    project_accessor: str | None = None  # ``projects.core.dataTest``: the part after ``projects.``
 
     @property
     def coordinate(self) -> str | None:
@@ -154,6 +162,40 @@ class GradleScript:
                     )
                 )
                 continue
+            call = _PROJECT_CALL.match(self.masked, offset)
+            if call:
+                arguments = self._string_arguments(call.end())
+                if arguments:
+                    found.append(
+                        Dependency(
+                            config,
+                            None,
+                            None,
+                            None,
+                            None,
+                            self.path,
+                            line,
+                            is_platform,
+                            project=arguments[0],
+                        )
+                    )
+                continue
+            accessor = _PROJECT_ACCESSOR.match(self.masked, offset)
+            if accessor:
+                found.append(
+                    Dependency(
+                        config,
+                        None,
+                        None,
+                        None,
+                        None,
+                        self.path,
+                        line,
+                        is_platform,
+                        project_accessor=accessor.group(1).lstrip("."),
+                    )
+                )
+                continue
             ref = re.compile(r"libs((?:\.[A-Za-z_]\w*)+)").match(self.masked, offset)
             if ref:
                 found.append(
@@ -204,6 +246,14 @@ class GradleScript:
                 if directory:
                     found.append(directory)
         return found
+
+    @cached_property
+    def includes_are_dynamic(self) -> bool:
+        """The set of included projects cannot be read from literals: ``include(it)`` in a loop,
+        or a ``projectDir`` remap. Then a project that is "not included" may still exist."""
+        if "projectDir" in self.masked:
+            return True
+        return any(not self._string_arguments(m.end()) for m in _INCLUDE.finditer(self.masked))
 
     @cached_property
     def included_builds(self) -> list[str]:

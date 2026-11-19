@@ -4,6 +4,6 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from . import imports, resources, syntax
+from . import gradle, imports, resources, syntax
 
-RULE_MODULES: tuple[ModuleType, ...] = (syntax, imports, resources)
+RULE_MODULES: tuple[ModuleType, ...] = (syntax, imports, resources, gradle)

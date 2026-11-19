@@ -90,6 +90,23 @@ class ResolvedDependency:
         return f"{self.group}:{self.artifact}" if self.group and self.artifact else None
 
 
+@dataclass(frozen=True)
+class ProjectDependency:
+    """A dependency of one module on another module of the same build."""
+
+    source: str  # directory of the module whose script declares it
+    target: str | None  # directory of the module it points at; None if it is not included
+    reference: str  # as written: ":core:data" or "projects.core.dataTest"
+    config: str
+    path: str  # the build script
+    line: int
+
+
+def _camel(segment: str) -> str:
+    """Gradle's typesafe accessor name of a project path segment: ``data-test`` -> ``dataTest``."""
+    return re.sub(r"[-_]+([A-Za-z0-9])", lambda m: m.group(1).upper(), segment)
+
+
 def _resolve_class(name: str, package: str | None) -> str:
     if name.startswith("."):
         return f"{package}{name}" if package else name[1:]
@@ -371,6 +388,65 @@ class ProjectAnalysis:
                         ResolvedDependency(dep, None, None, None, unresolved_alias=True)
                     )
         return resolved
+
+    # -- project dependencies -----------------------------------------------------------------
+
+    @cached_property
+    def _root_settings(self) -> GradleScript | None:
+        return self.gradle_scripts.get("settings.gradle.kts") or self.gradle_scripts.get(
+            "settings.gradle"
+        )
+
+    @cached_property
+    def projects_known(self) -> bool:
+        """The root ``settings`` lists its projects as literals, so a reference to a project that
+        is not in the list is certainly wrong. Otherwise we cannot tell and never claim it."""
+        settings = self._root_settings
+        return bool(settings and settings.includes and not settings.includes_are_dynamic)
+
+    @cached_property
+    def project_dirs(self) -> dict[str, str]:
+        """Every way of naming an included project -> its directory.
+
+        ``":core:data-test"`` and the typesafe accessor ``"projects.core.dataTest"`` both map to
+        ``"core/data-test"``; ``":"`` is the root project.
+        """
+        found = {":": ""}
+        for directory in self._root_settings.includes if self._root_settings else ():
+            found[":" + directory.replace("/", ":")] = directory
+            accessor = ".".join(_camel(part) for part in directory.split("/"))
+            found[f"projects.{accessor}"] = directory
+        return found
+
+    @cached_property
+    def project_dependencies(self) -> list[ProjectDependency]:
+        """``project(":x")`` and ``projects.x`` dependencies of the main build's modules."""
+        separate = self._root_settings.included_builds if self._root_settings else []
+        found: list[ProjectDependency] = []
+        for path, script in self.gradle_scripts.items():
+            if any(path == b or path.startswith(b + "/") for b in separate):
+                continue  # a separate build with its own settings
+            source = path.rsplit("/", 1)[0] if "/" in path else ""
+            for dep in script.dependencies:
+                reference = dep.project or (
+                    f"projects.{dep.project_accessor}" if dep.project_accessor else None
+                )
+                if reference is None:
+                    continue
+                target = self.project_dirs.get(reference) if self.projects_known else None
+                found.append(
+                    ProjectDependency(source, target, reference, dep.config, path, dep.line)
+                )
+        return found
+
+    @cached_property
+    def module_graph(self) -> dict[str, frozenset[str]]:
+        """Module directory -> directories of the modules it depends on (resolved ones only)."""
+        graph: dict[str, set[str]] = defaultdict(set)
+        for dep in self.project_dependencies:
+            if dep.target is not None:
+                graph[dep.source].add(dep.target)
+        return {source: frozenset(targets) for source, targets in sorted(graph.items())}
 
     @cached_property
     def dependency_groups(self) -> frozenset[str]:
