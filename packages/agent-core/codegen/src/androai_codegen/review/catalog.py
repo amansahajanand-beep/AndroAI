@@ -645,6 +645,7 @@ LIBRARY_RESOURCE_NAMES: dict[tuple[str, str], tuple[str, ...]] = {
     ("integer", "google_play_services_version"): ("com.google.android.gms",),
     ("id", "recycler_view"): ("androidx.preference", "androidx.leanback"),
     ("id", "select_dialog_listview"): ("androidx.appcompat",),
+    ("style", "FragmentScenarioEmptyFragmentActivityTheme"): ("androidx.fragment",),
 }
 # Compared against the underscore form of a name (``Theme.Material3.X`` -> ``Theme_Material3_X``).
 # A bare ``Theme_`` is NOT here: ``@style/Theme.MyApp`` is the app's own and must be defined.

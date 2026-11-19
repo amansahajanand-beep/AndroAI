@@ -12,11 +12,16 @@ from .models import ReviewConfig, ReviewTarget
 from .project import ProjectFiles
 from .proto import generated_classes
 from .resources import ResourceIndex
-from .source import SourceFile, TypeDecl
+from .source import SourceFile, TypeDecl, matching_close
 from .xmlparse import DOCTYPE_REFUSED, XmlDoc, XmlNode, parse_xml
 
 COMPONENT_TAGS = ("activity", "activity-alias", "service", "receiver", "provider")
 _XML_PROLOG_AND_COMMENTS = re.compile(r"<\?.*?\?>|<!--.*?-->", re.DOTALL)
+_BUILD_SOURCE = re.compile(r"(?:^|/)(?:buildSrc|build-logic)/")
+_OBJECT = re.compile(r"\bobject[ \t]+([A-Za-z_]\w*)[ \t]*\{")
+_CONST = re.compile(
+    r'\bconst[ \t]+val[ \t]+([A-Za-z_]\w*)[ \t]*(?::[ \t]*String[ \t]*)?=[ \t]*"([^"\n]*)"'
+)
 
 
 class SymbolIndex:
@@ -242,7 +247,7 @@ class ProjectAnalysis:
         )
         if settings is None or not settings.includes:
             return frozenset(found)
-        separate = settings.included_builds
+        separate = [*settings.included_builds, "buildSrc"]  # buildSrc is an implicit build
         found = {
             m for m in found if m and not any(m == b or m.startswith(b + "/") for b in separate)
         }
@@ -356,10 +361,49 @@ class ProjectAnalysis:
     # -- dependencies -------------------------------------------------------------------
 
     @cached_property
+    def build_constants(self) -> dict[str, tuple[str, str, str | None]]:
+        """``Libs.MATERIAL`` -> (group, artifact, version) from ``const val`` declarations in
+        ``buildSrc`` / ``build-logic`` Kotlin files, e.g.
+        ``object Libs { const val MATERIAL = "com.google.android.material:material" }``.
+        Nested objects give dotted names (``Libs.Fragment.TESTING``). Strings with a template
+        (``"$group:artifact"``) or without a ``group:artifact`` shape are not coordinates."""
+        found: dict[str, tuple[str, str, str | None]] = {}
+        for path, source in self.sources.items():
+            if not _BUILD_SOURCE.search(path) or not path.endswith(".kt"):
+                continue
+            masked, raw = source.masked, source.lexed.source
+            objects = [
+                (m.start(), matching_close(masked, m.end() - 1), m.group(1))
+                for m in _OBJECT.finditer(masked)
+            ]
+            for match in _CONST.finditer(raw):
+                if not masked.startswith("const", match.start()):
+                    continue  # inside a comment
+                parts = match.group(2).split(":")
+                if len(parts) < 2 or not parts[0] or not parts[1] or "$" in parts[0] + parts[1]:
+                    continue
+                chain = [
+                    name
+                    for start, end, name in objects
+                    if end is not None and start < match.start() < end
+                ]
+                version = parts[2] if len(parts) > 2 and parts[2] else None
+                found[".".join([*chain, match.group(1)])] = (parts[0], parts[1], version)
+        return found
+
+    @cached_property
     def dependencies(self) -> list[ResolvedDependency]:
         resolved: list[ResolvedDependency] = []
         for script in self.gradle_scripts.values():
             for dep in script.dependencies:
+                if dep.constant:
+                    coordinate = self.build_constants.get(dep.constant)
+                    resolved.append(
+                        ResolvedDependency(dep, *coordinate)
+                        if coordinate
+                        else ResolvedDependency(dep, None, None, None)
+                    )
+                    continue
                 if dep.alias is None:
                     resolved.append(ResolvedDependency(dep, dep.group, dep.artifact, dep.version))
                     continue
@@ -421,7 +465,10 @@ class ProjectAnalysis:
     @cached_property
     def project_dependencies(self) -> list[ProjectDependency]:
         """``project(":x")`` and ``projects.x`` dependencies of the main build's modules."""
-        separate = self._root_settings.included_builds if self._root_settings else []
+        separate = [
+            *(self._root_settings.included_builds if self._root_settings else []),
+            "buildSrc",
+        ]
         found: list[ProjectDependency] = []
         for path, script in self.gradle_scripts.items():
             if any(path == b or path.startswith(b + "/") for b in separate):

@@ -38,7 +38,20 @@ _ICON_STYLE = {
     "TwoTone": "twotone",
 }
 _GENERATED_NAMES = {"R", "BuildConfig", "BR", "DataBindingComponent"}
-_GENERATED_SUFFIXES = ("Binding", "Directions", "Args", "_Impl", "_Factory", "_MembersInjector")
+_GENERATED_SUFFIXES = (
+    "Binding",
+    "Directions",
+    "Args",
+    "_Impl",
+    "_Factory",
+    "_MembersInjector",
+    # Hilt: @CustomTestApplication, @AndroidEntryPoint and component generation
+    "_Application",
+    "_GeneratedInjector",
+    "_HiltComponents",
+    "_HiltModules",
+    "_ComponentTreeDeps",
+)
 _GENERATED_PREFIXES = ("Dagger", "Hilt_")
 
 
@@ -156,6 +169,8 @@ def _unresolved_class_literals(
             continue
         if a.symbols.cap_names.get(name) or name in TYPE_IMPORTS:
             continue  # reported by import.missing
+        if _is_generated(name):
+            continue  # Dagger/Hilt/Room/data-binding output: exists only after the build
         yield finding(
             Severity.ERROR,
             "reference.unresolved_class",
@@ -258,6 +273,8 @@ def _one_pattern(
         return
     if pattern.label in declared_functions or pattern.label in a.symbols.fun_names:
         return  # the project defines its own function with this name
+    if pattern.label in imports.explicit:
+        return  # some import supplies that name (e.g. DataStore's own `edit` extension)
     if imports.provides(pattern.candidates):
         return
     yield finding(
@@ -356,6 +373,28 @@ def _is_icon(fqn: str) -> bool:
     return fqn.startswith("androidx.compose.material.icons.") and fqn.count(".") >= 5
 
 
+def _may_coexist(
+    a: ProjectAnalysis, source: SourceFile, name: str, first: str, second: str
+) -> bool:
+    """Two imports of one simple name that Kotlin accepts side by side.
+
+    Icons differ by receiver (see ``_is_icon``). Lowercase names are functions or properties,
+    which overload by receiver and arguments. A project function or property and a class of the
+    same name (``fun Rule.CoroutineScope()`` next to ``kotlinx.coroutines.CoroutineScope``) live in
+    different namespaces. Two *types* of the same name are a real clash.
+    """
+    if _is_icon(first) and _is_icon(second):
+        return True
+    if source.language == "kotlin" and name[:1].islower():
+        return True
+    return any(_is_project_non_type(a, fqn) for fqn in (first, second))
+
+
+def _is_project_non_type(a: ProjectAnalysis, fqn: str) -> bool:
+    package, _, last = fqn.rpartition(".")
+    return not a.symbols.has_type(fqn) and last in a.symbols.top_names.get(package, ())
+
+
 def _import_hygiene(a: ProjectAnalysis, path: str, source: SourceFile) -> Iterator[Finding]:
     seen: dict[str, str] = {}
     for imp in source.imports:
@@ -373,7 +412,7 @@ def _import_hygiene(a: ProjectAnalysis, path: str, source: SourceFile) -> Iterat
                 fix="Remove the duplicate import.",
                 key=imp.fqn,
             )
-        elif name in seen and not (_is_icon(seen[name]) and _is_icon(imp.fqn)):
+        elif name in seen and not _may_coexist(a, source, name, seen[name], imp.fqn):
             yield finding(
                 Severity.ERROR,
                 "import.conflicting",

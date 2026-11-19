@@ -27,7 +27,7 @@ _JAVA_ANNOTATION_TYPE = re.compile(r"@interface\s+([A-Za-z_]\w*)")
 _FUN = re.compile(r"(?<![\w.:`@])fun[ \t]+(?!interface\b)")
 _TOP_VAL = re.compile(
     r"^[ \t]*(?:(?:public|internal|private|const|lateinit|inline|override)[ \t]+)*"
-    r"(?:val|var)[ \t]+(?:<[^>\n]*>[ \t]*)?(?:[\w.<>?]+\.)?([A-Za-z_]\w*)",
+    r"(?:val|var)[ \t]+(?:<[^>\n]*>[ \t]*)?(?:[\w.<>?*, ]+\.)?([A-Za-z_]\w*)",
     re.M,
 )
 _CAP_NAME = re.compile(r"(?<![\w.$`])[A-Z]\w*")

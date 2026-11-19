@@ -41,6 +41,7 @@ _PROJECT_CALL = re.compile(
 _PROJECT_ACCESSOR = re.compile(
     r"(?:testFixtures[ \t]*\([ \t]*)?projects((?:\.[A-Za-z_]\w*)+)(?![\w(])"
 )
+_CONSTANT_REF = re.compile(r"([A-Z]\w*(?:\.[A-Za-z_]\w*)+)(?![\w(])")
 _RES_VALUE = re.compile(r"(?<![\w.])resValue\b[ \t]*\(?[ \t]*")
 _INCLUDE = re.compile(r"(?<![\w.])include\b[ \t]*\(?")
 _INCLUDE_BUILD = re.compile(r"(?<![\w.])includeBuild\b[ \t]*\(")
@@ -60,6 +61,7 @@ class Dependency:
     is_platform: bool = False
     project: str | None = None  # ``project(":core:data")``: the project path as written
     project_accessor: str | None = None  # ``projects.core.dataTest``: the part after ``projects.``
+    constant: str | None = None  # ``Libs.MATERIAL``: a constant from buildSrc, resolved by analysis
 
     @property
     def coordinate(self) -> str | None:
@@ -193,6 +195,22 @@ class GradleScript:
                         line,
                         is_platform,
                         project_accessor=accessor.group(1).lstrip("."),
+                    )
+                )
+                continue
+            constant = _CONSTANT_REF.match(self.masked, offset)
+            if constant:
+                found.append(
+                    Dependency(
+                        config,
+                        None,
+                        None,
+                        None,
+                        None,
+                        self.path,
+                        line,
+                        is_platform,
+                        constant=constant.group(1),
                     )
                 )
                 continue
