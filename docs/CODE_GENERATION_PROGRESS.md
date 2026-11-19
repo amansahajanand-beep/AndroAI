@@ -8,7 +8,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 1 | File-editing abstraction and patch engine | **Done, hardened (`5aea805`), verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
-| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b (security), 4b-2c (authentication) and 4b-3 (API use, null safety) not started**. |
+| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c (authentication) and 4b-3 (API use, null safety) not started**. |
 | 5 | New project generation | Not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
@@ -210,10 +210,58 @@ a project that imports `androidx.navigation3` is not judged by the Compose rules
 
 All deep-link findings are warnings, because a link may be meant to be reachable only from inside the app.
 
-**Not implemented yet (4b-2b, 4b-2c and 4b-3):** security (exported components and permissions, provider grants,
-cleartext traffic, `PendingIntent` mutability, API 34 receiver export flags, permission consistency, sensitive
-permission changes), authentication (recognised sign-in integrations, redirect configuration, hardcoded secrets,
-plain-text token storage), incorrect API use and null safety.
+### Phase 4b-2b: security
+
+The behaviour below was checked against developer.android.com before any rule was written: the `PendingIntent`
+reference (`FLAG_IMMUTABLE`, `FLAG_MUTABLE`, `FLAG_NO_CREATE`, `FLAG_ALLOW_UNSAFE_IMPLICIT_INTENT`), the Android 12 and
+14 behaviour changes, the `<provider>`, `<grant-uri-permission>` and `<application>` manifest references, the network
+security configuration guide, the security tips, and the `android.Manifest.permission` reference (for the protection
+level of every permission in the catalog; a test pins the two permission tables to it). Lint issue ids were taken from
+the Android lint check documentation. Nothing here claims to verify an app's authorization model; these are
+manifest, build and call-site checks that stay silent when they cannot read what they need.
+
+| Rule id | Severity | Reports | Documented basis |
+|---|---|---|---|
+| `security.pending_intent_mutability` | error | `PendingIntent.getActivity/getActivities/getBroadcast/getService/getForegroundService` whose flags are readable (`PendingIntent.FLAG_*` constants, `or` / `\|`, or `0`) and name neither `FLAG_IMMUTABLE` nor `FLAG_MUTABLE`, where the app targets 31+. A `FLAG_NO_CREATE` lookup is not a creation and is not judged | "Starting with S, it will be required to explicitly specify the mutability of PendingIntents on creation" |
+| `security.pending_intent_mutable_implicit` | error | `FLAG_MUTABLE` around an inline implicit `Intent("action")` / `Intent()` / `Intent(Intent.ACTION_X)`, target 34+, without `FLAG_ALLOW_UNSAFE_IMPLICIT_INTENT` | "creation of a PendingIntent with FLAG_MUTABLE and an implicit Intent within will throw an IllegalArgumentException" for apps targeting U |
+| `security.receiver_export_flag_missing` | error | `registerReceiver(receiver, IntentFilter("custom.action"))` (the 2- and 4-argument forms) where the inline filter's actions are all readable and at least one is not a system (`android.`) action, target 34+ | the Android 14 behaviour change (context-registered receivers must say `RECEIVER_EXPORTED` or `RECEIVER_NOT_EXPORTED` unless they register only for system broadcasts), and lint `UnspecifiedRegisterReceiverFlag`: "In Android U, all receivers registering for non-system broadcasts are required to include a flag indicating the receiver's exported state" |
+| `security.provider_exported_unprotected` | warning | `<provider android:exported="true">` with no `permission` / `readPermission` / `writePermission` and no `<path-permission>`; says so when it can also grant URI permissions | security tips: export only what other apps must reach and protect it with a permission; lint `ExportedContentProvider` |
+| `security.provider_grants_all` | warning | `<grant-uri-permission>` with `pathPrefix="/"` or `pathPattern` `.*` / `/.*` | the element's reference: a prefix matches "all data subsets with paths that share that initial part", `.*` matches "any sequence of zero to many characters"; lint `GrantAllUris` |
+| `security.service_exported_unprotected` | warning | `<service android:exported="true">` with no `android:permission` whose intent-filter actions, if any, are all custom | lint `ExportedService` |
+| `security.receiver_exported_unprotected` | warning | the same for `<receiver>` | lint `ExportedReceiver` |
+| `security.cleartext_enabled` | warning | `android:usesCleartextTraffic="true"` in a `main` manifest with no `networkSecurityConfig` (the attribute is ignored on API 24+ when a config exists). Notes the platform default only when the target is known to be 28+ | the attribute's reference: default true up to API 27, false from API 28 |
+| `security.cleartext_permitted` | warning | a network security config whose `base-config`, or `domain-config` for a real (not local-development) domain, sets `cleartextTrafficPermitted="true"` | "cleartext traffic ... should be avoided whenever possible"; lint `InsecureBaseConfiguration` |
+| `security.cleartext_url_blocked` | warning | a literal `http://` URL given to `baseUrl(...)`, `url(...)` or `URL(...)` for a non-local host, where the app targets 28+ and *nothing* in the project's manifests or network security config permits cleartext | the default of `usesCleartextTraffic` from API 28 |
+| `security.permission_not_declared` | warning | a dangerous permission named in a file that requests or checks run-time permissions, while no manifest in the project declares it | the runtime permission workflow (declare, then request) |
+| `security.permission_never_requested` | warning | a dangerous permission declared in a `main` manifest, mentioned nowhere in the project, in a module whose own code requests or checks other permissions | same |
+| `change.sensitive_permission_added` | error, `approval="other_high_impact"` | a dangerous or special-access permission the project did not declare before. Judged across the whole project, so moving it between manifests is not an addition; skipped when the "before" project has no manifest | the reference's protection levels: `dangerous`, or `appop` / installer-granted special access |
+
+**How a finding is judged.**
+
+- *Premises are checked, not assumed.* The `PendingIntent`, receiver and URL rules need the app's target SDK as a
+  literal (a library module is judged by the lowest target of the applications of the build; an unreadable one makes
+  it silent), and the URL rule additionally needs every shipping manifest parsed, no `usesCleartextTraffic` other than
+  `false`, and any network security config readable and not permitting cleartext at all (even for localhost).
+- *Unreadable means silent.* Flags held in a variable or computed, an intent built elsewhere (or with `setPackage`),
+  a filter held in a field, an `addAction` with a constant of our own, a template URL, `LocalBroadcastManager` (no
+  export flag exists for it), a `registerReceiver` of a shape the platform does not have: none is judged. Comments
+  inside the flags neither hide nor add a flag.
+- *Local development hosts are not reported* (`localhost`, loopback, private ranges, `.local`/`.test` names,
+  documentation placeholders, dotless names).
+- *Suppressions the project already made are honoured*, for the rules that have a documented lint id: `tools:ignore`
+  on the element or an enclosing one (or `all`), `@SuppressLint` / `@Suppress` / `@SuppressWarnings` / `@file:Suppress`
+  anywhere in the file, an unrestricted `lint.xml` entry with severity `ignore`, and an id named after `disable` /
+  `ignore` in a Gradle script. This errs towards silence. No suppression is honoured for a rule without a documented
+  id (`cleartext_enabled`, `cleartext_url_blocked`, the permission rules), and `tools:ignore` on a `domain-config` is
+  not honoured.
+- *Keys survive edits.* Call-site findings are keyed by their call (kind and flags, actions, or URL) plus an ordinal
+  among identical calls, so a second identical call added by a patch is new rather than hidden, and an unrelated
+  edit does not make an old finding new.
+
+Reuses the existing approval kind `other_high_impact`; no new contract kind is introduced.
+
+**Not implemented yet (4b-2c and 4b-3):** authentication (recognised sign-in integrations, redirect configuration,
+hardcoded secrets, plain-text token storage), incorrect API use and null safety.
 
 ## Generation workflow, supported technologies, repair rules
 
@@ -224,12 +272,13 @@ The patch engine is language-agnostic: it edits UTF-8 text files and knows nothi
 
 ## Verification
 
-Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening, the real-project fixes and 4b-1).
+Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening, the real-project fixes, 4b-1, 4b-2a and 4b-2b).
 
 | Platform | Commit | `pytest packages/agent-core/codegen` | Ruff |
 |---|---|---|---|
-| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4b-2a (the commit that added this row) | **682 passed, 5 skipped, 1 xfailed** (about 2 min) | `ruff check` clean; `ruff format --check` clean (72 files); `compileall` clean |
-| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4b-2a | **686 passed, 1 skipped, 1 xfailed** (about 30 s) | `ruff check` clean; `ruff format --check` clean (72 files); `compileall` clean |
+| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4b-2b (the commit that added this row) | **778 passed, 5 skipped, 1 xfailed** (about 2.4 min) | `ruff check` clean; `ruff format --check` clean (74 files); `compileall` clean |
+| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4b-2b | **782 passed, 1 skipped, 1 xfailed** (about 32 s) | `ruff check` clean; `ruff format --check` clean (Linux ruff counted 75 files; both trees hold the same 74 `.py` files); `compileall` clean |
+| Windows / Linux | `65e9d50` (Phase 4b-2a) | 682 passed, 5 skipped, 1 xfailed / 686 passed, 1 skipped, 1 xfailed | clean (72 files) |
 | Windows / Linux | `912727b` (Phase 4a.7) | 623 passed, 5 skipped, 1 xfailed / 627 passed, 1 skipped, 1 xfailed | clean (67 files) |
 | Windows / Linux | `b12e5b8` (Phase 4a.6) | 594 passed, 5 skipped, 1 xfailed / 598 passed, 1 skipped, 1 xfailed | clean (66 files) |
 | Windows / Linux | `12c2618` (Phase 4b-1) | 576 passed, 5 skipped, 1 xfailed / 580 passed, 1 skipped, 1 xfailed | clean (64 files). Measured one edit before the commit: a pure performance memoization of `dependency_groups_for`, re-checked by the review tests |
@@ -525,6 +574,55 @@ mutations are caught, and the original 22 4a mutations still are.
   and it is correct: that app declares a catch-all `https` filter with no host, so a link to any host reaches it.
   The other five silent cases are the ones from 4b-1.
 
+### Phase 4b-2b verification
+
+- **96 new tests** (`tests/test_review_security.py`): every rule has a positive case and the twins that must stay
+  quiet (the compliant form, the form the analyzer cannot read, the premise that does not hold, each boundary SDK
+  level, each exemption). A test pins `DANGEROUS_PERMISSIONS` and `SPECIAL_ACCESS_PERMISSIONS` to the documented
+  protection levels, and the known-good sample project still reports nothing. Test helpers assert that no
+  `review.internal_error` appears.
+- **Mutation check: 143 of 143 caught** (the 4b-2b rules, their fact scanner and the change rule), and the earlier
+  suites still pass: 114 of 114 (4a.6 to 4b-2a) and 22 of 22 (4a). All 75 tests passed on the first run, which proves
+  nothing about tests written alongside the code; the first mutation run caught 106 of 107. The survivor was a
+  missing test (the lower-casing in the local-host check is only reachable through a network security config
+  domain). Two later anchors went stale because the code was edited, and were re-run on their own.
+- **Real projects, no faults (5): one security finding in total, and it is unconfirmed.** `AntennaPod` reports
+  `security.permission_not_declared` for `READ_EXTERNAL_STORAGE` in `OpmlImportActivity` (the repository declares no
+  such permission; a dependency's manifest might, and that cannot be read without a build). Nothing is reported on
+  `nowinandroid`, `iosched`, `sunflower` or `platform-samples`.
+  - **Two findings disappeared because the project had already acknowledged them**, which led to the suppression
+    support: `AntennaPod`'s `FeedUpdateReceiver` carries `tools:ignore="ExportedReceiver"` (and the app module's Gradle
+    `lint` block disables `ExportedReceiver` too), and its `base-config` carries `tools:ignore="InsecureBaseConfiguration"`. Both were true
+    observations about a deliberate design, reported as news before the change.
+- **The call-site rules were checked against real code with the missing premise supplied.** Because only
+  `platform-samples` writes a literal `targetSdk`, the `PendingIntent`, receiver and URL rules were run once more
+  with the target forced to 35 (an experiment in a throwaway process, not a behaviour): `iosched`'s two real
+  `PendingIntent.getBroadcast` calls with `FLAG_UPDATE_CURRENT` and `0` are reported (correctly: they have no
+  mutability flag; `iosched` targets 30, so the product stays silent), and the 16 calls of `platform-samples`, the 9
+  of `AntennaPod` and the 1 of `nowinandroid` produce nothing. Two `platform-samples` calls remain unreadable because
+  their flags are an `if (SDK_INT < S) ... else ...` expression, which is silence by design.
+- **Three defects found by real projects, not by the tests:** (1) the project's own `tools:ignore` / `lint.xml`
+  suppressions were ignored (above); (2) a comment inside the flags argument (`/* flags = */ A or B`, or a `//`
+  note before the constants) made the call unreadable, because flags were read from raw text (four `platform-samples`
+  calls; fixed by reading the comment-masked text, two remain for the reason above); (3) `iosched`'s `ar` module
+  declares `CAMERA` and `WRITE_EXTERNAL_STORAGE`, never mentions them and relies on ARCore to ask, so
+  `permission_never_requested` would have been a false positive as soon as that project's target became readable.
+  The rule is now judged only in a module whose own code requests or checks permissions. Two guards that no input
+  could distinguish from their absence (`ContextCompat` and a `RECEIVER_` text check) were removed rather than kept.
+- **Real projects, faults injected in memory (88 faults over the five projects, 33 of them new): 71 caught, 17
+  silent.** The 33 new security-scope faults: 22 caught, 11 silent. Caught: a `PendingIntent` that loses
+  `FLAG_IMMUTABLE` (`platform-samples`), a mutable implicit `PendingIntent`, `registerReceiver` without an export flag
+  and a plain-HTTP `baseUrl` (`platform-samples`), a request for an undeclared permission (four projects), an
+  exported service, provider and receiver (all four projects with a readable app module; on `AntennaPod` the receiver
+  stays silent because its Gradle lint configuration disables `ExportedReceiver`), a `grant-uri-permission` for every path,
+  `usesCleartextTraffic="true"` (three projects), and a newly added `RECORD_AUDIO` (three projects). The 11 silent ones
+  all have a reason that was checked: for `iosched`, `sunflower` and `AntennaPod` the `PendingIntent`, receiver and
+  URL faults are silent because the target SDK is not a literal (9 faults; `AntennaPod`'s app module takes it from
+  `common.gradle`), the `AntennaPod` URL fault is silent anyway because that project permits cleartext, and
+  `RECORD_AUDIO` is not "added" to `platform-samples` because five of its samples already declare it (the rule is
+  project-wide on purpose). `nowinandroid` has no readable application module (convention plugins), so none of the new
+  faults could be injected there. The other 6 silent faults of the 88 are the ones from 4b-1.
+
 ### Platform coverage (Windows and Linux together)
 
 Some tests can only run on one operating system, so each platform skips some. Together they cover all 415 tests:
@@ -624,12 +722,12 @@ Phase 4 (code review):
 - Multi-module projects are treated as one: resources and dependencies are looked up project-wide (permissive).
 - Resource types a library may legitimately provide (`style`, and names with library prefixes) are skipped, so
   a typo in such a name is not caught.
-- **Eight rule groups run** (`syntax`, `imports`, `resources`, `gradle`, `manifest`, `navigation`, `deeplinks` and,
-  with a "before" state, `changes`; 48 rule ids). Nothing checks security (exported components, intents,
-  permissions), authentication, incorrect API use or null safety yet (4b-2b, 4b-2c and 4b-3), and there is no
-  language or framework detector.
-- A review report with no findings therefore says nothing about security, authentication or API use. It must not be
-  presented as "the project is safe".
+- **Nine rule groups run** (`syntax`, `imports`, `resources`, `gradle`, `manifest`, `navigation`, `deeplinks`,
+  `security` and, with a "before" state, `changes`; 61 rule ids). Nothing checks authentication, incorrect API use or
+  null safety yet (4b-2c and 4b-3), and there is no language or framework detector. The security group is the
+  narrow set listed under Phase 4b-2b, not a security audit.
+- A review report with no findings therefore says nothing about authentication or API use, and little about
+  security. It must not be presented as "the project is safe".
 
 Phase 4b-1 (manifest, build and change-aware rules):
 
@@ -683,6 +781,44 @@ Phase 4b-2a (navigation and deep links):
   web server is not, and could not be, checked.
 - **Navigation 3 is deliberately not analysed.**
 
+Phase 4b-2b (security):
+
+- **The call-site rules need a literal target SDK, and most real projects do not write one.** Only `platform-samples`
+  (of five) states `targetSdk` as a number. `sunflower` writes `libs.versions.targetSdk.get().toInt()`, `iosched` a
+  `buildSrc` constant (`Versions.TARGET_SDK`, which is 30), `AntennaPod`'s app module takes it from a shared script
+  (`apply from: "../common.gradle"`), and `nowinandroid` uses convention plugins. In those projects `security.pending_intent_*`, `security.receiver_export_flag_missing` and
+  `security.cleartext_url_blocked` stay silent by design. Resolving a catalog version or a `buildSrc` constant would
+  fix this, but it reads Gradle more completely than 4b-2b was approved to, and it would also change
+  `manifest.exported_missing` (which uses the same target), so it was **not done**; it is the obvious next step.
+- **Library manifests cannot be read.** `security.permission_not_declared` therefore says "a library's manifest
+  could" declare the permission, and `security.permission_never_requested` can be wrong when an SDK asks for the
+  permission itself. The latter is judged only in a module whose own code already requests or checks permissions
+  (iosched's `ar` module declares `CAMERA` and relies on ARCore's `ArFragment` to ask; judging it would have been a
+  false positive), and a permission mentioned anywhere (code, a resource array) is never reported. A project with no
+  permission code at all is therefore never told that a declared permission is unused, even when it is.
+- **`permission_not_declared` is a warning with an unverified premise.** The one real-project hit (`AntennaPod`,
+  `READ_EXTERNAL_STORAGE`) was checked only as far as "no manifest in the repository declares it"; whether a
+  dependency's manifest does could not be determined without a build.
+- **Intent security is limited to `PendingIntent` mutability and `registerReceiver` flags.** Not implemented: implicit
+  intents to non-exported components, `sendBroadcast` without a permission, `FLAG_GRANT_*` URI grants, WebView
+  JavaScript, custom permissions' protection levels, `android:debuggable`, backup rules. Implicit exports (an
+  intent filter without `android:exported`, targets below 31) are not judged.
+- **Exported services and receivers are only flagged when every action is custom (or there is no filter).** A
+  receiver that listens for a system action and a custom one is not reported, nor is anything with an `android.`,
+  `androidx.`, `com.android.` or `com.google.` action (media browser and session services, boot receivers).
+  Those are treated as platform contracts; an app that really exposes one unprotected is missed.
+- **Cleartext coverage is three call shapes** (`baseUrl`, `url`, `URL`) with a literal single argument. `Uri.parse`,
+  `WebView.loadUrl`, templated URLs and URLs held in constants are not read. A library that adds
+  `usesCleartextTraffic` through its own manifest would make `cleartext_url_blocked` wrong; that merge cannot be
+  seen. The rule is silent as soon as *any* manifest or config in the project permits cleartext.
+- **Suppressions are honoured coarsely.** An annotation anywhere in a file, or an id disabled anywhere in a Gradle
+  script that mentions `disable`/`ignore` within 400 characters, silences the rule for the whole file or project.
+  `lint-baseline.xml` is not read.
+- **`change.sensitive_permission_added` blocks until approved.** It is an error with `approval="other_high_impact"`:
+  a patch that adds `CAMERA` for a camera feature the user asked for is held for approval unless the caller already
+  granted it. `QUERY_ALL_PACKAGES` (documented as a `normal` permission) is not in the table.
+- Nothing in 4b-2b was compiled or run on a device. Behaviour rests on the documentation and on tests.
+
 - **No known false positive of the 4a rules remains on the five validation projects** (Phases 4a.6 and 4a.7
   fixed the last four). Two limits stay by design:
   - `items(total) { ... }` in a lazy list is judged as the extension that needs its import, because `total` may be
@@ -697,7 +833,7 @@ Phase 4b-2a (navigation and deep links):
 
 Not done:
 
-- **Phase 4b-2b, 4b-2c and 4b-3** (security, authentication, API-use and null-safety rules).
+- **Phase 4b-2c and 4b-3** (authentication, API-use and null-safety rules).
 - **More real-project validation** (see Phase 4 limitations): five projects have been reviewed in total, and the
   older rules still showed false positives on two of the newer ones; more are needed before any finding is
   allowed to block a patch in production.

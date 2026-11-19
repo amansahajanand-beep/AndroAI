@@ -619,6 +619,14 @@ class ProjectAnalysis:
         return NavigationFacts.build(self)
 
     @cached_property
+    def security(self):
+        """PendingIntent, receiver-registration, URL and permission call sites (see
+        ``securityfacts.py``)."""
+        from .securityfacts import SecurityFacts  # imported lazily: it needs this module
+
+        return SecurityFacts.build(self)
+
+    @cached_property
     def component_classes(self) -> dict[str, tuple[str, str, int]]:
         """Concrete Activity / Service / BroadcastReceiver classes of the app's own sources:
         ``fqn -> (kind, path, line)``. A class counts if it extends a framework base (see

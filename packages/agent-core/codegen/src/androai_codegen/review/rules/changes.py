@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from ..analysis import ManifestInfo, ProjectAnalysis
-from ..catalog import SENSITIVE_DEPENDENCY_GROUPS
+from ..catalog import DANGEROUS_PERMISSIONS, SENSITIVE_DEPENDENCY_GROUPS, SPECIAL_ACCESS_PERMISSIONS
 from ..models import Finding, Severity, finding
 from .manifest import _fqn, _nodes, _removed
 
@@ -32,6 +32,7 @@ def compare(before: ProjectAnalysis, after: ProjectAnalysis) -> Iterator[Finding
     yield from _tests(before, after)
     yield from _sdk(before, after)
     yield from _exposure(before, after)
+    yield from _sensitive_permission_added(before, after)
 
 
 def _changed(
@@ -147,6 +148,56 @@ def _permissions(before: ProjectAnalysis, after: ProjectAnalysis) -> Iterator[Fi
                     fix="Make sure nothing in the app still needs it.",
                     key=permission,
                 )
+
+
+def _sensitive_permissions(a: ProjectAnalysis) -> dict[str, tuple[str, int]]:
+    """Sensitive permissions the shipping manifests declare: name -> (manifest, line)."""
+    found: dict[str, tuple[str, int]] = {}
+    for path, info in a.manifests.items():
+        if a.is_test_source(path):
+            continue
+        for node in info.root.iter():
+            if node.tag not in ("uses-permission", "uses-permission-sdk-23") or _removed(node):
+                continue
+            name = node.attrs.get("android:name", "")
+            short = name.removeprefix("android.permission.")
+            if name.startswith("android.permission.") and (
+                short in DANGEROUS_PERMISSIONS or short in SPECIAL_ACCESS_PERMISSIONS
+            ):
+                found.setdefault(name, (path, node.line))
+    return found
+
+
+def _sensitive_permission_added(
+    before: ProjectAnalysis, after: ProjectAnalysis
+) -> Iterator[Finding]:
+    """A dangerous or special-access permission the project did not declare before. Judged across
+    the whole project, so moving a declaration between manifests is not an addition, and skipped
+    when the 'before' project has no manifest at all (a project being created)."""
+    if not before.manifests:
+        return
+    old = _sensitive_permissions(before)
+    for name, (path, line) in sorted(_sensitive_permissions(after).items()):
+        if name in old:
+            continue
+        short = name.removeprefix("android.permission.")
+        how = (
+            "the user must grant at run time"
+            if short in DANGEROUS_PERMISSIONS
+            else "the user must switch on in system settings"
+        )
+        yield finding(
+            Severity.ERROR,
+            "change.sensitive_permission_added",
+            "changes",
+            path,
+            f"The change adds the permission {short}, which {how}. It widens what the app can "
+            "access on the device.",
+            line=line,
+            fix="Adding a sensitive permission needs the user's approval.",
+            key=name,
+            approval="other_high_impact",
+        )
 
 
 def _exposure(before: ProjectAnalysis, after: ProjectAnalysis) -> Iterator[Finding]:
