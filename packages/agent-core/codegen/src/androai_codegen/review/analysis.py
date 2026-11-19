@@ -612,6 +612,13 @@ class ProjectAnalysis:
         return self.source_set(path).startswith(TEST_SOURCE_SETS)
 
     @cached_property
+    def navigation(self):
+        """Compose routes, XML navigation graphs and deep links (see ``navigation.py``)."""
+        from .navigation import NavigationFacts  # imported lazily: it needs this module
+
+        return NavigationFacts.build(self)
+
+    @cached_property
     def component_classes(self) -> dict[str, tuple[str, str, int]]:
         """Concrete Activity / Service / BroadcastReceiver classes of the app's own sources:
         ``fqn -> (kind, path, line)``. A class counts if it extends a framework base (see

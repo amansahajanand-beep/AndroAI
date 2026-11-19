@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from . import gradle, imports, manifest, resources, syntax
+from . import deeplinks, gradle, imports, manifest, navigation, resources, syntax
 
-RULE_MODULES: tuple[ModuleType, ...] = (syntax, imports, resources, gradle, manifest)
+RULE_MODULES: tuple[ModuleType, ...] = (
+    syntax,
+    imports,
+    resources,
+    gradle,
+    manifest,
+    navigation,
+    deeplinks,
+)

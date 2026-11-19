@@ -22,7 +22,10 @@ INTERNET = '    <uses-permission android:name="android.permission.INTERNET" />\n
 
 
 def run(files):
-    return ReviewEngine().review(ProjectFiles.from_mapping(files))
+    report = ReviewEngine().review(ProjectFiles.from_mapping(files))
+    # a rule that crashes becomes this finding; a test must never mistake it for silence
+    assert not [f for f in report.findings if f.rule == "review.internal_error"]
+    return report
 
 
 def found(files, prefix="manifest."):

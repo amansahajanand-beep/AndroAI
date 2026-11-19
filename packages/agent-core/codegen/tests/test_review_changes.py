@@ -19,7 +19,12 @@ SETTINGS_KT = (
 
 def review(before, after, config=None):
     engine = ReviewEngine(config)
-    return engine.review(ProjectFiles.from_mapping(after), before=ProjectFiles.from_mapping(before))
+    report = engine.review(
+        ProjectFiles.from_mapping(after), before=ProjectFiles.from_mapping(before)
+    )
+    # a rule that crashes becomes this finding; a test must never mistake it for silence
+    assert not [f for f in report.findings if f.rule == "review.internal_error"]
+    return report
 
 
 def changes(before, after, config=None):

@@ -8,7 +8,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 1 | File-editing abstraction and patch engine | **Done, hardened (`5aea805`), verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
-| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2 and 4b-3 not started**: navigation, security, API usage, null safety. |
+| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b (security), 4b-2c (authentication) and 4b-3 (API use, null safety) not started**. |
 | 5 | New project generation | Not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
@@ -186,7 +186,34 @@ now, rebuilds it as it was at the checkpoint from the shadow-git history (only t
 back) and reports what changed since, including edits nobody recorded yet. `project_at_checkpoint` exposes the
 rebuilt project. Nothing is written to the workspace or the history.
 
-**Not implemented yet (4b-2 and 4b-3):** navigation, security, incorrect API use and null safety.
+### Phase 4b-2a: navigation and deep links
+
+The behaviour below was checked against the official Android documentation before any rule was written
+(developer.android.com: Navigation design and deep links, `NavController`, `NavGraph`, "Create deep links" and
+"Verify Android App Links"). Navigation 3 (`NavDisplay`, `NavKey`) is a different library and is **out of scope**:
+a project that imports `androidx.navigation3` is not judged by the Compose rules, and nothing computed is guessed.
+
+| Rule id | Severity | Reports | Documented basis |
+|---|---|---|---|
+| `navigation.destination_missing` | error | `navigate("route")` or `navigate(RouteType(...))` where no `composable` / `dialog` / `navigation` of the project declares it. `{arg}` segments match filled-in and `$template` calls; the query string is ignored | `navigate` "throws `IllegalArgumentException`" for an invalid route |
+| `navigation.start_destination_missing` | error | a `NavHost` or `navigation(...)` start destination nothing declares; an XML `<navigation>` with destinations but no `app:startDestination`, or one pointing at an id that is not its own | a graph "is not valid until you add destinations and set a start destination" |
+| `navigation.action_target_missing` | error | an XML `<action app:destination="@id/x">` where no navigation graph in the project declares `x` | same |
+| `navigation.destination_class_missing` | error | an XML `<fragment>` / `<activity>` / `<dialog>` naming a fully qualified class of the app's own packages that does not exist | |
+| `navigation.duplicate_destination` | warning | one route declared twice in one graph builder (same function), or one `android:id` twice in one XML graph | not documented by Android, so worded as "ambiguous", not as a crash |
+| `deeplink.missing_browsable` | warning | a VIEW filter for `http`/`https` without `BROWSABLE` | "required in order for the intent filter to be accessible from a web browser" |
+| `deeplink.missing_default` | warning | a VIEW filter with `<data>` but no `DEFAULT` | "the activity can be started only if the intent specifies your app component name" |
+| `deeplink.autoverify_ineffective` | warning | `autoVerify="true"` on a filter lacking VIEW, BROWSABLE, DEFAULT or an http/https scheme, or mixing in another scheme | "do not include other schemes, as this will prevent verification" |
+| `deeplink.merged_data_elements` | warning | `<data>` elements of one filter that differ in both scheme and host (the cross product also matches unintended URIs) | the guide's own `https://www.example.com` plus `app://open.my.app` example |
+| `deeplink.duplicate_app_link` | warning | the same verified link in two different components | "no guarantee as to which Activity handles the link" |
+| `deeplink.nav_graph_not_in_manifest` | warning | an XML graph with `<deepLink>` that no `<nav-graph>` in any manifest enables (and no other graph includes) | XML graphs "must also add a single `<nav-graph>` element" |
+| `deeplink.uri_not_in_manifest` | warning | a Compose `navDeepLink { uriPattern = "..." }` / `navDeepLink<T>(basePath = "...")` literal whose scheme and host no manifest VIEW filter matches (wildcard hosts, a missing scheme meaning http or https, and host-less filters are honoured) | programmatic graphs "cannot automatically generate" the manifest filters |
+
+All deep-link findings are warnings, because a link may be meant to be reachable only from inside the app.
+
+**Not implemented yet (4b-2b, 4b-2c and 4b-3):** security (exported components and permissions, provider grants,
+cleartext traffic, `PendingIntent` mutability, API 34 receiver export flags, permission consistency, sensitive
+permission changes), authentication (recognised sign-in integrations, redirect configuration, hardcoded secrets,
+plain-text token storage), incorrect API use and null safety.
 
 ## Generation workflow, supported technologies, repair rules
 
@@ -201,8 +228,9 @@ Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening, 
 
 | Platform | Commit | `pytest packages/agent-core/codegen` | Ruff |
 |---|---|---|---|
-| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4a.7 (the commit that added this row) | **623 passed, 5 skipped, 1 xfailed** (about 2.3 min) | `ruff check` clean; `ruff format --check` clean (67 files); `compileall` clean |
-| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4a.7 | **627 passed, 1 skipped, 1 xfailed** (about 28 s) | `ruff check` clean; `ruff format --check` clean (67 files); `compileall` clean |
+| Windows 10, Python 3.12.10, Git 2.56.1 | Phase 4b-2a (the commit that added this row) | **682 passed, 5 skipped, 1 xfailed** (about 2 min) | `ruff check` clean; `ruff format --check` clean (72 files); `compileall` clean |
+| Linux (WSL Ubuntu, Python 3.14.4, git 2.53.0, ext4), working-tree export | Phase 4b-2a | **686 passed, 1 skipped, 1 xfailed** (about 30 s) | `ruff check` clean; `ruff format --check` clean (72 files); `compileall` clean |
+| Windows / Linux | `912727b` (Phase 4a.7) | 623 passed, 5 skipped, 1 xfailed / 627 passed, 1 skipped, 1 xfailed | clean (67 files) |
 | Windows / Linux | `b12e5b8` (Phase 4a.6) | 594 passed, 5 skipped, 1 xfailed / 598 passed, 1 skipped, 1 xfailed | clean (66 files) |
 | Windows / Linux | `12c2618` (Phase 4b-1) | 576 passed, 5 skipped, 1 xfailed / 580 passed, 1 skipped, 1 xfailed | clean (64 files). Measured one edit before the commit: a pure performance memoization of `dependency_groups_for`, re-checked by the review tests |
 | Windows 10, Python 3.12.10, Git 2.56.1 | `8f20e01` (code of the latest commit) | **500 passed, 5 skipped, 1 xfailed** (about 1.3 min: the VCS tests spawn git) | `ruff check` clean; `ruff format --check` clean (58 files); `compileall` clean |
@@ -468,6 +496,35 @@ is a documented xfail, a true duplicate import and three true duplicate-dependen
 `items`, 19 for the framework classes, including Java and the suggestion order), 13 new mutations: all 77 current
 mutations are caught, and the original 22 4a mutations still are.
 
+### Phase 4b-2a verification
+
+- **59 new tests** (navigation 35, deep links 24). The known-good sample project, which has a real `NavHost`,
+  still reports nothing under any new rule. The 4b-1 and 4b-2a test helpers now also assert that no
+  `review.internal_error` is produced: a rule that crashes is turned into that finding, which a test filtering by
+  rule prefix would mistake for silence. This closed a real blind spot (see below); the 76 older 4b tests passed
+  with the assertion, so nothing was crashing unnoticed.
+- **Mutation check: 114 of 114 caught** (37 new, 77 earlier), and the original 22 4a mutations still are. The first
+  run caught 112 of 115. One survivor was an *equivalent* mutant (a redundant guard, removed from the code), one was
+  a missing test (a navigation file without a `NavController`), and one was the crash blind spot: a mutation made a
+  rule raise, the engine reported it as `review.internal_error`, and the prefix-filtered test saw "no finding".
+- **Two defects found by the tests themselves, not by review:** `composable<Home> { ... }` with a trailing lambda
+  has no parentheses, and the first regex required them, so every type-safe test would have passed *vacuously*;
+  and the `@Serializable` check looked 300 characters back, so a class without the annotation inherited the one
+  of the declaration above it. Both are fixed and covered.
+- **Real projects, no faults (5): nothing reported by any 4b-2a rule.** The analysis really reads the structure
+  (`iosched`: 3 XML graphs, 8 actions, 19 destination ids; `platform-samples`: 1 graph, 7 actions; `AntennaPod`: 25
+  intent filters, 4 with `autoVerify`; `nowinandroid` is recognised as Navigation 3 and skipped). The Compose rules
+  stayed silent on every project that has a `NavHost`: `sunflower` starts at `Screen.Home.route` (a property of a
+  sealed class), `platform-samples` starts from a variable and has a non-`const` route. That is the designed
+  behaviour, but it means **no real project exercised the Compose route rules**; only the tests did.
+- **Real projects, faults injected in memory (55 faults over the five projects, 12 of them new): 49 caught, 6
+  silent.** New and caught: an XML action to a missing destination (`iosched`, `platform-samples`), a dropped
+  `app:startDestination` (both), `BROWSABLE` removed from a web filter (`nowinandroid`, `platform-samples`,
+  `AntennaPod`), a custom scheme added to an `autoVerify` filter (`AntennaPod`), a `navDeepLink` for a host no
+  filter matches (`iosched`, `sunflower`, `platform-samples`). The one new miss is `AntennaPod`'s `navDeepLink`,
+  and it is correct: that app declares a catch-all `https` filter with no host, so a link to any host reaches it.
+  The other five silent cases are the ones from 4b-1.
+
 ### Platform coverage (Windows and Linux together)
 
 Some tests can only run on one operating system, so each platform skips some. Together they cover all 415 tests:
@@ -567,10 +624,11 @@ Phase 4 (code review):
 - Multi-module projects are treated as one: resources and dependencies are looked up project-wide (permissive).
 - Resource types a library may legitimately provide (`style`, and names with library prefixes) are skipped, so
   a typo in such a name is not caught.
-- **Six rule groups run** (`syntax`, `imports`, `resources`, `gradle`, `manifest` and, with a "before" state,
-  `changes`; 36 rule ids). Nothing checks navigation, security, incorrect API use or null safety yet (4b-2 and
-  4b-3), and there is no language or framework detector.
-- A review report with no findings therefore says nothing about navigation, security or API use. It must not be
+- **Eight rule groups run** (`syntax`, `imports`, `resources`, `gradle`, `manifest`, `navigation`, `deeplinks` and,
+  with a "before" state, `changes`; 48 rule ids). Nothing checks security (exported components, intents,
+  permissions), authentication, incorrect API use or null safety yet (4b-2b, 4b-2c and 4b-3), and there is no
+  language or framework detector.
+- A review report with no findings therefore says nothing about security, authentication or API use. It must not be
   presented as "the project is safe".
 
 Phase 4b-1 (manifest, build and change-aware rules):
@@ -600,6 +658,31 @@ Phase 4b-1 (manifest, build and change-aware rules):
 - `gradle.sdk_order` is a warning because the exact behaviour of the Android Gradle plugin for out-of-order levels
   was not verified against a build. `gradle.compose_plugin_missing` states what the Kotlin 2.0 Compose compiler
   plugin requires; it was not checked against a real failing build either. Nothing in 4b was compiled.
+Phase 4b-2a (navigation and deep links):
+
+- **The Compose route rules only engage when every route is a literal or a `const val`.** A start destination such
+  as `Screen.Home.route` (a property of a sealed class), a variable, a non-`const` `val`, a `NavHost` given a prebuilt
+  graph, or any `composable(route)` whose route is computed marks the project "dynamic" and silences the rules. On
+  the five real projects that is what happened everywhere a `NavHost` exists, so the rules are proven by their tests
+  and by synthetic projects, not by real code. Apps generated in Phase 5 are the expected beneficiaries.
+- **Routes are matched project-wide, not per `NavHost`.** A route declared in one graph satisfies a `navigate` from
+  another, so a wrong graph is not caught. `navigate` is only read in files that mention a `NavController`, and
+  `popBackStack` is not checked at all (Android does not document it to throw).
+- **Type-safe routes** are judged only for a project class annotated `@Serializable` with a plain name; a generic
+  `composable<T>` silences the rules. A string `navigate` is not judged against type-safe destinations, nor the
+  reverse.
+- **XML graphs:** an action target is judged against the destination ids of *all* graphs in the project; `popUpTo`
+  is not checked; `findNavController().navigate(R.id.x)` calls are not checked; only fully qualified class names of
+  the app's own packages are checked. Safe Args output is not modelled.
+- **Duplicate routes** are only reported inside one function body, and Android does not document what happens with
+  a duplicate, so the finding says "ambiguous" and is a warning.
+- **Deep links:** filters that a `<nav-graph>` element would generate are not expanded, so a Compose URI that only
+  such a filter could match is reported. A host-less `https` filter matches every host, so it silences
+  `deeplink.uri_not_in_manifest`. A link meant only for in-app use is reported as unreachable from outside, by
+  design (a warning). `autoVerify` is only judged for the intent-filter shape; the Digital Asset Links file on the
+  web server is not, and could not be, checked.
+- **Navigation 3 is deliberately not analysed.**
+
 - **No known false positive of the 4a rules remains on the five validation projects** (Phases 4a.6 and 4a.7
   fixed the last four). Two limits stay by design:
   - `items(total) { ... }` in a lazy list is judged as the extension that needs its import, because `total` may be
@@ -614,7 +697,7 @@ Phase 4b-1 (manifest, build and change-aware rules):
 
 Not done:
 
-- **Phase 4b-2 and 4b-3** (navigation, security, API-use and null-safety rules).
+- **Phase 4b-2b, 4b-2c and 4b-3** (security, authentication, API-use and null-safety rules).
 - **More real-project validation** (see Phase 4 limitations): five projects have been reviewed in total, and the
   older rules still showed false positives on two of the newer ones; more are needed before any finding is
   allowed to block a patch in production.

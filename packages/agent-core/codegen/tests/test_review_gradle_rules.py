@@ -16,7 +16,10 @@ TEST_DEP = "    testImplementation(libs.junit)\n"
 
 
 def run(files, config=None):
-    return ReviewEngine(config).review(ProjectFiles.from_mapping(files))
+    report = ReviewEngine(config).review(ProjectFiles.from_mapping(files))
+    # a rule that crashes becomes this finding; a test must never mistake it for silence
+    assert not [f for f in report.findings if f.rule == "review.internal_error"]
+    return report
 
 
 def found(files, rule, config=None):
