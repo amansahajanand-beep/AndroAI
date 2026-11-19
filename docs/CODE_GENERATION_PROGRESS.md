@@ -8,7 +8,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 1 | File-editing abstraction and patch engine | **Done, hardened (`5aea805`), verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
-| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures only; **not yet validated on a real project**. **4b not started**: manifest, navigation, dependencies, security, API usage, null safety, change-aware rules. |
+| 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, one real project (`nowinandroid`: 0 false findings, 9 of 9 injected faults caught). **4b not started**: manifest, navigation, dependencies, security, API usage, null safety, change-aware rules. |
 | 5 | New project generation | Not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
@@ -160,12 +160,16 @@ The patch engine is language-agnostic: it edits UTF-8 text files and knows nothi
 
 ## Verification
 
-Results below are for `p3/review-engine` at commit `5aea805` (Phase 4a plus the patch-engine hardening).
+Results below are for `p3/review-engine` (Phase 4a, the patch-engine hardening and the real-project fixes).
 
-| Platform | `pytest packages/agent-core/codegen` | Ruff |
-|---|---|---|
-| Windows 10, Python 3.12.10, Git 2.56.1 | **410 passed, 5 skipped** (about 1-2 min: the VCS tests spawn git) | `ruff check` clean; `ruff format --check` clean (50 files); `compileall` clean |
-| Linux (WSL Ubuntu, Python 3.14.4, ext4), exported copy of the same commit | **414 passed, 1 skipped** | `ruff check` clean |
+| Platform | Commit | `pytest packages/agent-core/codegen` | Ruff |
+|---|---|---|---|
+| Windows 10, Python 3.12.10, Git 2.56.1 | latest (real-project fixes, see below) | **438 passed, 5 skipped** (about 1 min: the VCS tests spawn git) | `ruff check` clean; `ruff format --check` clean (52 files); `compileall` clean |
+| Windows (same) | `5aea805` | 410 passed, 5 skipped | clean (50 files) |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4), exported copy | `5aea805` | **414 passed, 1 skipped** | `ruff check` clean |
+
+The Linux run predates the real-project fixes and has **not been repeated** for the latest commit; the 28 new
+review tests are pure Python and platform independent, but that is an expectation, not a measurement.
 
 | Other check | Result |
 |---|---|
@@ -193,6 +197,39 @@ Real bugs the Phase 4a tests found (all fixed, each with a regression test):
 - `sealed class A { object B : A() }` lost `B`'s supertype (header scan did not stop at `}`).
 - Treating every `Theme.*` as a library style would have hidden the common mistake of referencing an app theme
   that was never defined; only library-specific prefixes are skipped now.
+
+### Real-project validation (review engine)
+
+Run over Google's open-source `android/nowinandroid` (commit `2982e63`, 715 files, 310 Kotlin files, 35 Gradle
+modules, convention plugins, version catalog, protobuf, Room, Hilt, Compose, Navigation 3) in a disposable
+clone; the clone was verified byte-for-byte unchanged afterwards and all fault injection used copies.
+
+| Check | First run | After fixes |
+|---|---|---|
+| Blocking findings on code that compiles in upstream CI | **34** (all false positives) | **0** |
+| Faults injected into real code that the 4a rules should catch (missing/typo import, unbalanced bracket, unterminated string, unresolved `R.string` and `@string`, duplicate class, duplicate resource, library import removed) | 9 of 9 | 9 of 9 |
+| A CRLF copy of the whole project | identical findings | identical findings |
+| Patch review (benign edit, removed import, new file with unbalanced bracket, approved delete of a widely imported class, unapproved delete, stale checksum, protected file) | correct | correct; the workspace was byte-identical afterwards |
+| Parsed facts | 26 manifests and their launcher/permissions/components, 31 namespaces from Gradle, 103 catalog libraries, 147 catalog dependencies (matches an independent count) | modules 37 -> **35** (exact), `libs.bundles.*` resolved, `custom_catalogs` correct |
+| Review time | about 1.5 s per full review | same |
+
+The 34 false positives and their fixes (each with a regression test and a twin proving the real error is
+still reported, in `tests/test_review_realworld.py`):
+
+- A project that adds helpers to a library's package (`package androidx.test.uiautomator`) made the library's
+  own classes look unresolved (17). Packages under framework roots, curated library packages or a declared
+  dependency's Maven group are no longer treated as project-only.
+- Classes generated from `.proto` files (5): `.proto` files are now read (`java_package`,
+  `java_multiple_files`, `java_outer_classname`, top-level messages/enums/services).
+- Nested members of the generated `R` class, e.g. `import ns.R.string` (5).
+- The same icon name imported from two style packages (`outlined.Bookmarks`, `rounded.Bookmarks`) is not a
+  conflict, and the second import no longer hides the first (4).
+- `rule.apply { setContent {} }`: a bare `setContent` inside an `apply`/`run`/`with` block may be a member of the
+  receiver (1).
+- Words inside a backtick test name read as code (1), which also unbalanced brackets.
+- A comment-only license-header XML outside `res/` and the manifest reported as malformed (1).
+- Gradle facts for later rules: catalog bundles, `create("libs") { from(files(...)) }` counted as a custom
+  catalog, and included builds (`build-logic`) and the root counted as modules.
 
 Patch-engine hardening (commit `5aea805`). Found by reading the branches the tests did not reach (the `editing`
 package was at 95% line coverage) and reproducing each one. The regression tests were written first:
@@ -267,9 +304,19 @@ Phase 2 (version control):
 
 Phase 4 (code review):
 
-- **Never validated on a real-world project.** The only inputs so far are a hand-written 18-file Compose app
-  (which must produce zero findings) and one-fault-at-a-time breakages of it. The false-positive rate on real
-  code is unknown; running it over real projects is the first thing to do before trusting a blocking finding.
+- **Validated on one real project only** (`nowinandroid`, see Verification): zero findings on code that
+  compiles, 9 of 9 injected 4a faults caught. One project is not a false-positive rate. Its first run produced 34
+  false blocking findings from a handful of patterns, so other projects will have patterns not seen yet; run
+  more real projects (different DSL, Java, XML views, Groovy, Dagger/Room generated code) before trusting a
+  blocking finding in production.
+- Heuristics added for real code are deliberately narrow: implicit-receiver calls are only excused for
+  `setContent` inside `apply`/`run`/`with`; a package counts as library-provided only under framework roots, the
+  curated library list or a declared dependency's group; `include(...)` paths are assumed to be directories
+  (a `projectDir` override is not followed).
+- `review_patch` reloads and re-parses the whole project on every call (about 4.8 s on 715 files), so a repair
+  loop that reviews many patches should not call it in a tight loop until the "before" analysis is cached.
+- Inter-module dependencies (`project(":x")`, `projects.x.y`, 103 of 250 dependency lines in `nowinandroid`) are
+  not modelled, only catalog and string coordinates.
 - **Not a compiler.** A name that is neither declared in the project nor in the curated list is never reported;
   type inference, overload resolution and most generics are out of reach. No finding does not mean it compiles.
 - The curated tables (about 250 names, a few dozen library mappings) only list names that really need an
@@ -293,15 +340,16 @@ Phase 4 (code review):
 Not done, and not part of 4a:
 
 - **Phase 4b** (manifest, navigation, dependency/Gradle, security, API-use, null-safety and change-aware rules).
-- **Real-project validation** of the review engine (false-positive rate, parser coverage on real Gradle/XML,
-  performance). Required before any finding is allowed to block a patch in production.
+- **More real-project validation** (see Phase 4 limitations): one project is done, more are needed before any
+  finding is allowed to block a patch in production.
 - **Review is not wired to checkpoints.** `review_patch` works on a `PatchEngine`; running a review against a
   `CheckpointManager` checkpoint is not implemented.
 - **No worker integration.** `workers/ai-agent` does not import `androai_codegen`; nothing consumes `CodingTask`,
   and `ReviewReport` is not mapped to the contract's `ReviewFinding` (the field names already match).
 - **Contracts** are still a proposal awaiting Persons 2 and 4. **CI** does not install or test codegen, and the
   ai-agent image has no codegen package or git (details below).
-- **Push is blocked** (HTTP 403 for the current account). Everything on `p3/review-engine` is local.
+- **Push**: `p3/review-engine` is on `origin` (an earlier HTTP 403 for `vinayaksahajanand-cell` no longer
+  occurs). No pull request is open and `p3/codegen-foundation` has not been pushed.
 
 ## Needs action from other owners
 
