@@ -13,7 +13,7 @@ from androai_codegen.editing.workspace import Workspace
 
 from .models import ReviewConfig
 
-TEXT_SUFFIXES = (".kt", ".kts", ".java", ".xml", ".gradle", ".toml")
+TEXT_SUFFIXES = (".kt", ".kts", ".java", ".xml", ".gradle", ".toml", ".proto")
 
 
 def is_text_path(path: str) -> bool:

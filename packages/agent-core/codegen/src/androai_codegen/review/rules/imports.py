@@ -47,6 +47,7 @@ class _Imports:
 
     def __init__(self, source: SourceFile) -> None:
         self.explicit: dict[str, str] = {}  # simple (or alias) name -> fqn
+        self.imported: set[str] = set()  # every explicitly imported fqn, even if a name repeats
         self.wildcards: set[str] = set()
         for imp in source.imports:
             if imp.static:
@@ -55,11 +56,12 @@ class _Imports:
                 self.wildcards.add(imp.fqn)
             elif imp.simple_name:
                 self.explicit[imp.simple_name] = imp.fqn
+                self.imported.add(imp.fqn)
 
     def provides(self, candidates: tuple[str, ...]) -> bool:
         """True if an explicit import names one of the candidates or a wildcard covers it."""
         for candidate in candidates:
-            if candidate in self.explicit.values():
+            if candidate in self.imported:
                 return True
             if candidate.rsplit(".", 1)[0] in self.wildcards:
                 return True
@@ -210,6 +212,30 @@ def _missing_calls(
         yield from _one_pattern(a, path, source, imports, pattern, compose, declared_functions)
 
 
+_RECEIVER_BLOCK = re.compile(
+    r"(?:\.\s*(?:apply|run)|(?<![\w.])(?:apply|run)|\bwith\s*\([^()]*\))\s*$"
+)
+
+
+def _in_receiver_scope(code: str, offset: int) -> bool:
+    """True if ``offset`` is inside a ``{ }`` block of ``x.apply``, ``x.run``, ``with(x)``.
+
+    Those lambdas have the object as ``this``, so a bare call there can be one of its members.
+    ``code`` has strings and comments blanked, so braces in them cannot mislead the scan.
+    """
+    depth = 0
+    for i in range(offset - 1, -1, -1):
+        char = code[i]
+        if char == "}":
+            depth += 1
+        elif char == "{":
+            if depth:
+                depth -= 1
+            elif _RECEIVER_BLOCK.search(code[max(0, i - 120) : i]):
+                return True
+    return False
+
+
 def _one_pattern(
     a: ProjectAnalysis,
     path: str,
@@ -223,7 +249,10 @@ def _one_pattern(
         return
     if pattern.requires and not pattern.requires.search(source.code):
         return
-    match = pattern.regex.search(source.code)
+    code = source.code
+    match = pattern.regex.search(code)
+    while match and pattern.member_possible and _in_receiver_scope(code, match.start()):
+        match = pattern.regex.search(code, match.end())
     if not match:
         return
     if pattern.label in declared_functions or pattern.label in a.symbols.fun_names:
@@ -319,6 +348,13 @@ def _missing_icons(path: str, source: SourceFile, imports: _Imports) -> Iterator
 # --- hygiene --------------------------------------------------------------------------------
 
 
+def _is_icon(fqn: str) -> bool:
+    """Material icons are extension properties on ``Icons.<Style>``, so the same name imported
+    from two style packages (``outlined.Bookmarks``, ``rounded.Bookmarks``) is not a clash: the
+    receiver picks one."""
+    return fqn.startswith("androidx.compose.material.icons.") and fqn.count(".") >= 5
+
+
 def _import_hygiene(a: ProjectAnalysis, path: str, source: SourceFile) -> Iterator[Finding]:
     seen: dict[str, str] = {}
     for imp in source.imports:
@@ -336,7 +372,7 @@ def _import_hygiene(a: ProjectAnalysis, path: str, source: SourceFile) -> Iterat
                 fix="Remove the duplicate import.",
                 key=imp.fqn,
             )
-        elif name in seen:
+        elif name in seen and not (_is_icon(seen[name]) and _is_icon(imp.fqn)):
             yield finding(
                 Severity.ERROR,
                 "import.conflicting",
@@ -384,8 +420,11 @@ def _unresolved_project_import(a: ProjectAnalysis, path: str, imp) -> Iterator[F
         return
     symbols = a.symbols
     segments = imp.fqn.split(".")
-    for end in range(len(segments) - 1, 0, -1):
-        if symbols.has_type(".".join(segments[:end])):
+    for end in range(len(segments), 0, -1):
+        prefix = ".".join(segments[:end])
+        if prefix in a.proto_types:
+            return  # generated from a .proto file (or a member of such a class)
+        if end < len(segments) and symbols.has_type(prefix):
             return  # a member of a project type (object constant, enum entry, ...)
     package = ".".join(segments[:-1])
     in_project_namespace = any(

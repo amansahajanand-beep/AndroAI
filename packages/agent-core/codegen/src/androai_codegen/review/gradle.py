@@ -35,6 +35,10 @@ _APPLY_PLUGIN = re.compile(r"\bapply[ \t]+plugin[ \t]*:[ \t]*")
 _KOTLIN_PLUGIN = re.compile(r"(?<![\w.])kotlin[ \t]*\([ \t]*")
 _PLUGIN_ALIAS = re.compile(r"(?<![\w.])alias[ \t]*\([ \t]*libs\.plugins((?:\.[A-Za-z_]\w*)+)")
 _ARTIFACT_MAP = re.compile(r"\bgroup[ \t]*[:=]")
+_INCLUDE = re.compile(r"(?<![\w.])include\b[ \t]*\(?")
+_INCLUDE_BUILD = re.compile(r"(?<![\w.])includeBuild\b[ \t]*\(")
+_CATALOG_CREATE = re.compile(r"(?<![\w.])create[ \t]*\([ \t]*")
+_FROM_FILES = re.compile(r"(?<![\w.])from[ \t]*\([ \t]*files[ \t]*\(")
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,7 @@ class VersionCatalog:
     plugins: dict[str, str | None] = field(default_factory=dict)
     versions: set[str] = field(default_factory=set)
     bundles: set[str] = field(default_factory=set)
+    bundle_members: dict[str, tuple[str, ...]] = field(default_factory=dict)  # bundle -> libraries
     error: str | None = None
     error_line: int | None = None
 
@@ -94,7 +99,10 @@ def parse_catalog(text: str) -> VersionCatalog:
         plugin_id = value if isinstance(value, str) else (value or {}).get("id")
         catalog.plugins[_accessor(key)] = plugin_id.split(":")[0] if plugin_id else None
     catalog.versions = {_accessor(k) for k in (data.get("versions") or {})}
-    catalog.bundles = {_accessor(k) for k in (data.get("bundles") or {})}
+    for key, members in (data.get("bundles") or {}).items():
+        names = tuple(_accessor(m) for m in members if isinstance(m, str)) if members else ()
+        catalog.bundle_members[_accessor(key)] = names
+    catalog.bundles = set(catalog.bundle_members)
     return catalog
 
 
@@ -159,6 +167,53 @@ class GradleScript:
                         is_platform,
                     )
                 )
+        return found
+
+    def _string_arguments(self, offset: int) -> list[str]:
+        """The string literals of a call's comma-separated arguments, starting at ``offset``."""
+        values: list[str] = []
+        n = len(self.masked)
+        while offset < n:
+            while offset < n and self.masked[offset] in " \t\r\n,":
+                offset += 1
+            literal = self.lexed.string_starting_at(offset)
+            if literal is None or not literal.terminated:
+                break
+            values.append(self.lexed.string_value(literal))
+            offset = literal.end
+        return values
+
+    @cached_property
+    def includes(self) -> list[str]:
+        """Directories of the projects a settings script includes (``":a:b"`` -> ``a/b``)."""
+        found: list[str] = []
+        for match in _INCLUDE.finditer(self.masked):
+            for value in self._string_arguments(match.end()):
+                directory = value.strip(":").replace(":", "/")
+                if directory:
+                    found.append(directory)
+        return found
+
+    @cached_property
+    def included_builds(self) -> list[str]:
+        """Directories (relative to this script) of ``includeBuild("...")`` builds."""
+        return [
+            value.strip("/")
+            for match in _INCLUDE_BUILD.finditer(self.masked)
+            for value in self._string_arguments(match.end())[:1]
+            if value.strip("/")
+        ]
+
+    @cached_property
+    def catalog_declarations(self) -> list[tuple[str, bool]]:
+        """``(name, from_local_file)`` for each ``versionCatalogs { create("name") { ... } }``."""
+        matches = list(_CATALOG_CREATE.finditer(self.masked))
+        found: list[tuple[str, bool]] = []
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(self.masked)
+            names = self._string_arguments(match.end())
+            local = bool(_FROM_FILES.search(self.masked, match.end(), end))
+            found.append((names[0] if names else "", local))
         return found
 
     @cached_property

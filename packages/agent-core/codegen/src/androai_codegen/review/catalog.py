@@ -291,6 +291,9 @@ class ImportPattern:
     candidates: tuple[str, ...]
     compose_only: bool = False
     requires: re.Pattern[str] | None = None  # the file must also match this to apply
+    # A bare call may instead be a member of an implicit receiver (``rule.apply { setContent {} }``),
+    # which needs no import. Inside such a scope the call proves nothing.
+    member_possible: bool = False
 
 
 def _call(
@@ -299,6 +302,7 @@ def _call(
     *candidates: str,
     compose_only: bool = False,
     requires: str | None = None,
+    member_possible: bool = False,
 ) -> ImportPattern:
     return ImportPattern(
         label,
@@ -306,6 +310,7 @@ def _call(
         candidates,
         compose_only,
         re.compile(requires) if requires else None,
+        member_possible,
     )
 
 
@@ -368,7 +373,12 @@ CALL_IMPORTS: tuple[ImportPattern, ...] = (
         compose_only=True,
     ),
     # Not compose_only: an Activity calling setContent {} may import no other Compose symbol.
-    _call("setContent", r"(?<![\w.])setContent\s*\{", "androidx.activity.compose.setContent"),
+    _call(
+        "setContent",
+        r"(?<![\w.])setContent\s*\{",
+        "androidx.activity.compose.setContent",
+        member_possible=True,
+    ),
     _call(
         "viewModel",
         r"(?<![\w.])viewModel\s*(?:<[^>\n]*>\s*)?\(",

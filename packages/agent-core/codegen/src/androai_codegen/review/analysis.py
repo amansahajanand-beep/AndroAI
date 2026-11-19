@@ -10,6 +10,7 @@ from functools import cached_property
 from .gradle import Dependency, GradleScript, VersionCatalog, parse_catalog
 from .models import ReviewConfig, ReviewTarget
 from .project import ProjectFiles
+from .proto import generated_classes
 from .resources import ResourceIndex
 from .source import SourceFile, TypeDecl
 from .xmlparse import XmlDoc, XmlNode, parse_xml
@@ -132,6 +133,15 @@ class ProjectAnalysis:
         }
 
     @cached_property
+    def proto_types(self) -> frozenset[str]:
+        """Classes generated from the project's ``.proto`` files (importable, not in sources)."""
+        found: set[str] = set()
+        for path, text in self.files.texts.items():
+            if path.endswith(".proto"):
+                found |= generated_classes(path, text)
+        return frozenset(found)
+
+    @cached_property
     def template_xml(self) -> frozenset[str]:
         """XML files holding only a prolog and comments (e.g. a license-header template).
 
@@ -158,8 +168,19 @@ class ProjectAnalysis:
 
     @cached_property
     def custom_catalogs(self) -> bool:
-        """The build defines version catalogs other than the default ``libs`` one."""
-        return any("versionCatalogs" in s.masked for s in self.gradle_scripts.values())
+        """The build defines version catalogs other than the default ``libs`` one.
+
+        ``create("libs") { from(files("../gradle/libs.versions.toml")) }`` (what an included build
+        does to share the root catalog) is the default catalog, not a custom one. A second name,
+        a remote ``from("group:artifact:version")`` or a block we cannot read counts as custom.
+        """
+        for script in self.gradle_scripts.values():
+            if "versionCatalogs" not in script.masked:
+                continue
+            declared = script.catalog_declarations
+            if not declared or any(name != "libs" or not local for name, local in declared):
+                return True
+        return False
 
     # -- indexes ------------------------------------------------------------------------
 
@@ -175,12 +196,25 @@ class ProjectAnalysis:
 
     @cached_property
     def modules(self) -> frozenset[str]:
+        """Module directories. A directory with a build script is a module, except that in a
+        multi-module build (root ``settings`` with ``include``) the root itself is not one and
+        neither is anything inside an ``includeBuild`` (e.g. ``build-logic``), which is a
+        separate build. Included projects count even without a build script."""
         found = set()
         for path in self.gradle_scripts:
             name = path.rsplit("/", 1)[-1]
             if name in ("build.gradle", "build.gradle.kts"):
                 found.add(path.rsplit("/", 1)[0] if "/" in path else "")
-        return frozenset(found)
+        settings = self.gradle_scripts.get("settings.gradle.kts") or self.gradle_scripts.get(
+            "settings.gradle"
+        )
+        if settings is None or not settings.includes:
+            return frozenset(found)
+        separate = settings.included_builds
+        found = {
+            m for m in found if m and not any(m == b or m.startswith(b + "/") for b in separate)
+        }
+        return frozenset(found | set(settings.includes))
 
     def module_of(self, path: str) -> str | None:
         parts = path.split("/")[:-1]
@@ -300,6 +334,20 @@ class ProjectAnalysis:
                 accessor = dep.alias.removeprefix("libs.")
                 for suffix in (".get", ".asProvider"):
                     accessor = accessor.removesuffix(suffix)
+                members = (
+                    self.catalog.bundle_members.get(accessor.removeprefix("bundles."))
+                    if self.catalog and accessor.startswith("bundles.")
+                    else None
+                )
+                if members is not None:  # a catalog bundle stands for all of its libraries
+                    for member in members:
+                        known = self.catalog.libraries.get(member) if self.catalog else None
+                        resolved.append(
+                            ResolvedDependency(dep, *known)
+                            if known
+                            else ResolvedDependency(dep, None, None, None, unresolved_alias=True)
+                        )
+                    continue
                 entry = self.catalog.libraries.get(accessor) if self.catalog else None
                 if entry:
                     resolved.append(ResolvedDependency(dep, entry[0], entry[1], entry[2]))
