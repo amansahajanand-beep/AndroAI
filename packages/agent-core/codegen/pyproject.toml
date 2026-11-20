@@ -36,4 +36,6 @@ ignore = ["SIM905"]
 [tool.ruff.lint.per-file-ignores]
 # Pure data: curated tables and embedded fixture files, where wrapping hurts more than it helps.
 "src/androai_codegen/review/catalog.py" = ["E501"]
+# The version catalog template: a TOML inline table has to stay on one line.
+"src/androai_codegen/templates/kotlin_compose.py" = ["E501"]
 "tests/sample_project.py" = ["E501"]

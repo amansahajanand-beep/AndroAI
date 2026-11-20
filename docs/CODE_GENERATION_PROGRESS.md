@@ -9,7 +9,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
 | 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c done** (authentication: 8 new rule ids, 65 tests, 94 of 94 mutations caught; nothing reported on the five real projects unfaulted, 25 of 33 authentication faults injected into them caught, the other 8 silent because the build is not readable enough). **Target SDK resolution done** (a follow-up: `targetSdk` is now also read from a version-catalog entry or a `buildSrc` constant, so the rules that depend on it engage on `iosched` and `sunflower`; 121 tests, 27 of 27 mutations caught, no new finding on the five real projects, 101 of 121 injected faults caught, up from 96). **4b-3 (API use, null safety) not started**. |
-| 5 | New project generation | Not started |
+| 5 | New project generation | **In progress. 5.1 done (uncommitted): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Never built with Gradle**; toolchain pins are provisional. Prompt-driven generation, planning and the worker are not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
 | 8 | Visual editor source mapping | Not started |
@@ -332,12 +332,157 @@ do not depend on the target SDK; only `security.permission_never_requested` (abo
 
 **Not implemented yet (4b-3):** incorrect API use and null safety.
 
+## Project templates (Phase 5.1)
+
+`androai_codegen.templates` renders a new Android project as a `PatchSet`. One template exists: **Kotlin + Jetpack
+Compose**, single module `:app`. It is a deterministic function from a validated `ProjectConfig` to files. It calls
+no LLM, plans nothing and writes nothing: `PatchEngine` applies the result, so path safety, protection, journal,
+checkpoint and rollback are the existing ones.
+
+> **Not Gradle-verified.** No JDK, Gradle or Android SDK was available where this was written, so no generated
+> project has been built. The tests prove structure, internal consistency, and that the static review accepts the
+> output. They do not prove that Gradle resolves the pinned versions or that the code compiles. The pins in
+> `templates/versions.py` are **provisional** until a real build passes (`PROVISIONAL = True`).
+
+### Architecture
+
+| Module | Role |
+|---|---|
+| `config.py` | `ProjectConfig` (frozen pydantic model, `extra="forbid"`), `Language`, `UiToolkit`. Invalid input raises `pydantic.ValidationError`, like an invalid `PatchSet` |
+| `validation.py` | Name rules: package, application ID, project name, version name. Reject, never "fix up" |
+| `naming.py` | ASCII identifiers derived from the display name (theme function, style name, Gradle root name) |
+| `versions.py` | **The only place a version is spelled**: `TOOLCHAIN` pins, default SDK levels, `SOURCES` (where each pin was read) |
+| `render.py` | `__NAME__` placeholder substitution (single pass, unknown placeholder is an error), `android_string` escaping |
+| `kotlin_compose.py` | The template: 19 files as text with placeholders |
+| `renderer.py` | Registry keyed by (language, UI toolkit), `render_files`, `render_patch` (-> `PatchSet` of `CreateFile`) |
+| `errors.py` | `TemplateError`, `UnsupportedTemplateError`, `TemplateRenderError` |
+
+Every rendered path goes through the existing `normalize_relative_path` and must come out unchanged; a duplicate path,
+a NUL or CR character, or a missing final newline is a `TemplateRenderError`. A placeholder value can therefore not
+smuggle in `..`, a backslash, a drive letter, `.git` or a device name, even if a validator were wrong. Output is sorted by
+path and contains no date, host name, random id or absolute path: the same config renders the same bytes.
+
+### Inputs (`ProjectConfig`)
+
+| Field | Default | Rule |
+|---|---|---|
+| `project_name` | required | NFC-normalised display name: letters, digits and combining marks of any script, single spaces and `_ - . ' & , ( ) ! +`; starts with a letter or digit; at most 50 characters. No consecutive spaces (Android collapses them in a string resource). Only `strings.xml` receives it, escaped |
+| `package_name` | required | The `namespace` and Kotlin package: at least two segments, each `[a-z][a-z0-9_]*`; no Kotlin hard keyword, Java reserved word or literal (`_` included) or Windows device name; at most 100 characters |
+| `application_id` | `package_name` | At least two segments, each starting with a letter, `[a-zA-Z0-9_]`. May differ from the package |
+| `language`, `ui_toolkit` | `kotlin`, `compose` | `java` and `xml` are valid values but have no template: rendering raises `UnsupportedTemplateError` naming what is available |
+| `min_sdk` | 24 | At least 24 (the floor of the pinned AndroidX libraries) and not above `target_sdk` |
+| `target_sdk` | 36 | Between `min_sdk` and `compile_sdk` |
+| `compile_sdk` | 37 | 37 only: Compose 1.12 and later need compileSdk 37 with AGP 9, and AGP 9.5 supports API 37 at most |
+| `version_code`, `version_name` | 1, `1.0` | Integer 1 to 2,100,000,000 (strict: no strings or booleans); `[0-9A-Za-z][0-9A-Za-z._+-]*`, at most 40 characters |
+
+### Generated structure (19 files)
+
+```text
+.gitignore
+build.gradle.kts                    plugins (apply false) + Kotlin Gradle plugin classpath
+settings.gradle.kts                 repositories, rootProject.name, include(":app")
+gradle.properties
+gradle/libs.versions.toml           version catalog: AGP, Kotlin, Compose BOM, activity, navigation
+gradle/wrapper/gradle-wrapper.properties   distribution URL and SHA-256 (no jar, no gradlew)
+app/build.gradle.kts                namespace, applicationId, SDK levels, Compose, dependencies
+app/proguard-rules.pro
+app/src/main/AndroidManifest.xml    launcher activity, no permissions, allowBackup="false"
+app/src/main/res/values/{strings,colors,themes}.xml
+app/src/main/res/values-night/themes.xml
+app/src/main/java/<package path>/MainActivity.kt
+app/src/main/java/<package path>/ui/theme/{Color,Type,Theme}.kt     Material 3, <Name>Theme
+app/src/main/java/<package path>/ui/home/HomeScreen.kt              sample screen with a @Preview
+app/src/main/java/<package path>/navigation/AppNavHost.kt           NavHost, one destination
+```
+
+### Usage
+
+```python
+from androai_codegen.editing import PatchEngine, Workspace
+from androai_codegen.review import review_patch
+from androai_codegen.templates import ProjectConfig, render_patch
+
+config = ProjectConfig(project_name="Notes App", package_name="com.example.notes")
+patch = render_patch(config, project_id="p1", run_id="r1", task_id="t1")   # a PatchSet of CreateFile
+review = review_patch(engine, patch)     # writes nothing; the rendered project has no findings
+if review.applicable:
+    engine.apply(patch)                  # or CheckpointManager.apply(patch) to track it
+```
+
+`render_files(config)` returns the same files as `RenderedFile(path, content, description)` for callers that want the
+text without a patch. Creating over an existing file fails the whole patch (`already_exists`), as for any create.
+
+### Toolchain decisions
+
+`docs/COMPATIBILITY_MATRIX.md` leaves the Android versions open ("pin one tested pair", "pin per generated-project
+template") and still lists compileSdk and targetSdk 35. That does not work with current libraries, so the template pins
+what the official sources documented on 2026-11-20 (`SOURCES` in `versions.py` has the detail):
+
+| Item | Pin | Why |
+|---|---|---|
+| Android Gradle plugin | 9.5.1 | Newest final on Google Maven. AGP 9 has Kotlin built in: the Kotlin Android plugin is **not** applied (applying it on AGP 9 is an error) and `useAndroidX` is on by default |
+| Gradle | 9.6.0 (SHA-256 in the wrapper properties) | AGP 9.5's documented minimum and default |
+| Kotlin | 2.4.21 | Newest final. Used through the `buildscript` classpath entry that the AGP built-in-Kotlin documentation describes, plus the Compose compiler plugin |
+| Compose BOM, activity-compose, navigation-compose | 2026.11.01, 1.13.0, 2.10.2 | Newest finals on Google Maven |
+| JDK | 17 | AGP 9.5's requirement |
+| compileSdk / targetSdk / minSdk | 37 / 36 / 24 | Compose needs 37; Google Play requires 36 or higher for new apps; 24 is the floor of the pinned navigation library |
+
+- **Known gap.** Kotlin's own compatibility table lists AGP 8.5.2 to 9.3.1 for Kotlin 2.4.21, below the pinned 9.5.1.
+  The pair is documented as workable through the classpath override, but nobody has built it.
+- **Contract defaults differ.** `AndroidTarget` defaults to 35 and is owned by other people; it was not touched. The
+  worker adapter that maps it onto `ProjectConfig` must not pass `compile_sdk=35` (rejected) and should decide what to
+  do with a `target_sdk` below 36 (accepted here, but Play will not take it for a new app).
+- **Navigation Compose with string routes** (`const val` route constants), not Navigation 3: the review engine's
+  navigation rules analyse the former only (see 4b-2a), and Navigation 3 is not analysed.
+- **Wrapper**: only `gradle-wrapper.properties`. The wrapper jar is a binary and the patch engine is text-only; `gradlew`
+  would need an execute bit the engine does not set. Whatever builds the project must run `gradle wrapper` or use a
+  Gradle installation. `PatchSet` cannot carry either file.
+- **No launcher icon, no `android:icon`** (lint warns about a missing application icon), `allowBackup="false"`, no
+  unit or instrumented test stubs.
+
+**Proposed update to `docs/COMPATIBILITY_MATRIX.md`** (not applied: "change only with team approval"; build owner is
+Person 4):
+
+| Item | Proposed |
+|---|---|
+| JDK | 17 |
+| Gradle / AGP | 9.6.0 / 9.5.1 (provisional until a build passes) |
+| Kotlin / Compose BOM | 2.4.21 / 2026.11.01, pinned in `androai_codegen.templates.versions` |
+| compileSdk / targetSdk / minSdk | 37 / 36 / 24 for generated projects (the `AndroidTarget` default of 35 / 35 / 24 does not build with Compose 1.12 and is not accepted for new Play apps) |
+
+### Limitations
+
+- **Never built.** See the note at the top of this section. A first real build may change versions or DSL details
+  that were read from documentation only: `compileSdk = 37` is written in the plain form and `buildFeatures { compose
+  = true }` is kept, and neither was confirmed against an AGP 9 build.
+- Single module, no flavors, no signing configuration, no `local.properties` (protected), no secrets.
+- One template (Kotlin + Compose). Application-ID rules are the documented ones; the Play Store may refuse more.
+- The project name is shown through one string resource. A name with no ASCII letters falls back to the identifier
+  `App` for the theme and the last package segment for the Gradle root name.
+- The review engine reads `.kt .kts .java .xml .gradle .toml .proto`, so the properties, ProGuard and `.gitignore` files
+  are generated but not reviewed. Two things the review engine does not catch in this project, checked by changing the
+  output: a manifest `@style/` reference to a missing style, and a missing `namespace` in `app/build.gradle.kts`. The
+  template tests cover both (see Phase 5.1 verification); the review rules were not changed.
+- A project exists only after something applies the patch; nothing here creates a Git repository or a checkpoint.
+
+### Adding a Java or XML-layout template later
+
+1. Add a module next to `kotlin_compose.py` that defines `FILES: tuple[TemplateFile, ...]`, using only placeholders from
+   `renderer.placeholder_values` (add new values there, with a test that every value is used).
+2. Register `Template(Language.JAVA, UiToolkit.XML, ..., FILES)` in `renderer._REGISTRY`. `Language` and `UiToolkit`
+   already have the members; nothing in the config, the validators or the renderer changes.
+3. Reuse the Gradle, catalog, wrapper and resource files by importing them from `kotlin_compose.py` (or moving them to
+   a shared module) and replace only the source files, the plugin and dependency lines.
+4. Add the same kinds of tests (structure, package declarations, review compatibility) and the faults-are-caught
+   sentinels of `tests/test_templates_patch.py`.
+
 ## Generation workflow, supported technologies, repair rules
 
-**Not implemented yet** (Phases 5-8). Planned per the Role 3 spec: Kotlin first with Jetpack Compose, then
-Java and XML layouts, and a repair loop bounded by iteration, time, cost, repeated-error and no-progress
-limits, returning infrastructure and provider failures to orchestration without touching source.
-The patch engine is language-agnostic: it edits UTF-8 text files and knows nothing about Kotlin or Gradle.
+**Mostly not implemented yet** (Phases 5.2 and later, 6-8). Phase 5.1 added the project templates above. Planned per the
+Role 3 spec: Kotlin first with Jetpack Compose, then Java and XML layouts, and a repair loop bounded by iteration, time,
+cost, repeated-error and no-progress limits, returning infrastructure and provider failures to orchestration without
+touching source. The patch engine is language-agnostic: it edits UTF-8 text files and knows nothing about Kotlin or
+Gradle.
 
 ## Verification
 
@@ -767,6 +912,49 @@ mutations are caught, and the original 22 4a mutations still are.
   readability gates described under 4b-2c (AppAuth and Credential Manager on four projects), `AntennaPod`'s `app`
   target in a shared script and its cleartext configuration, and the older 4b-1 and 4b-2a cases.
 
+### Phase 5.1 verification (project templates; uncommitted work on `p3/phase5-templates`, based on `467b82f`)
+
+| Check | Result |
+|---|---|
+| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen` | 1419 passed, 5 skipped, 1 xfailed (the 964 / 5 / 1 of `467b82f` plus 455 new tests) |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4), same suite from a fresh export of the working tree | 1423 passed, 1 skipped, 1 xfailed |
+| `ruff check`, `ruff format --check`, `compileall` | clean on both platforms |
+| New tests | 455 in five files: validation 206, config 70, render 59, Kotlin/Compose template 83, patch and review compatibility 37 |
+| Mutation testing of the new code (each mutation must fail a template test) | 120 of 120 caught; the first run caught 114 of 115: the survivor changed the JDK pin to 11, so a test that AGP 9.5's JDK 17 floor holds was added. Five more mutations (manifest style reference, namespace dropped or misplaced, night style renamed, missing colour reference) are caught by the new reference and namespace tests alone |
+| **Gradle build of the generated project** | **Not run. No JDK, Gradle or Android SDK is available in the environment.** |
+
+The 5 Windows skips and the Linux skip are the existing platform-specific tests listed below; the xfail is the existing
+one. The new tests need no `git` except one `CheckpointManager` test, which skips without it.
+
+What the template tests cover: valid and invalid package names (including every Kotlin hard keyword and Java reserved
+word, Windows device names, leading/trailing/double dots, uppercase, non-ASCII, control characters), application IDs,
+project names (injection characters, bidi and zero-width characters, combining marks, NFC normalisation), SDK-level
+and version-code rules, strict integer typing, derived identifiers, escaping of `&`, `'`, `<`, quotes, backslashes and
+a leading `@` / `?` in `strings.xml`, single-pass placeholder substitution, unsafe and non-canonical paths (traversal
+through a placeholder value included), determinism (rebuilt config, reordered template files, no dates or host
+names), exactly the 19 expected files, package declaration equal to directory, imports used and sorted, catalog
+consistency (every accessor exists, every entry is used, Compose libraries take their version from the BOM), manifest
+(launcher, `exported`, no permissions, resources exist), well-formed XML for varied names, the Compose skeleton, and
+`PatchSet` compatibility: preview, apply to a real workspace (byte-for-byte), refusal over existing files,
+rollback, checkpoint, and `review_patch`.
+
+Static review compatibility: the rendered project has **no review finding** (14 files analysed, none unparsed) for the
+default config and for six varied configs (other package, separate application ID, a name with `&`, a Devanagari
+name, other SDK levels). That is only meaningful if the rules are alive on this project, so seven sentinels break one
+generated file and require the right rule to fire: `import.missing`, `resource.unresolved` (twice),
+`manifest.class_missing`, `manifest.exported_missing`, `syntax.unbalanced_brackets` and `import.unresolved_project`.
+No review rule was changed or weakened. Two further breakages that were tried are **not** caught by the existing
+review rules, and were left alone: a manifest `@style/` reference to a style that does not exist, and an
+`app/build.gradle.kts` without `namespace`. The template tests check both directly instead, for six configs: the
+module has exactly one `namespace`, inside the `android` block, equal to the package and a valid package name, and it
+is what `.MainActivity`, the package declarations and the `R` import resolve against; every `@type/name` reference in the
+manifest and in the resource files, and every project-defined `parent` style, resolves to a resource defined in the
+default `values` directory (not only in `values-night`). The checker itself is tested against deliberately broken copies.
+
+Not done for 5.1: the five real-project review runs and fault injection (the review engine is unchanged); the contracts,
+worker and CI suites (nothing there was touched). `pyproject.toml` gained one `E501` per-file ignore for
+`templates/kotlin_compose.py`, because a TOML inline table of the version catalog cannot be wrapped.
+
 ### Platform coverage (Windows and Linux together)
 
 Some tests can only run on one operating system, so each platform skips some. Together they cover all 415 tests:
@@ -1008,11 +1196,18 @@ Phase 4b-2c (authentication):
     `Image`, `RadioButton`, `Snackbar`); another such name used with a wildcard import of its framework package would
     still be reported until it is added. The probe that found these checked twenty well-known names, not every class.
 
+Phase 5.1 (project templates): see "Project templates (Phase 5.1)" above. In short: the template has **never been built
+with Gradle**, its toolchain pins are provisional, there is one template (Kotlin + Compose, one module), the wrapper
+jar and scripts are not generated, and two kinds of breakage in a generated project are not caught by the review.
+
 ## Unfinished integration work
 
 Not done:
 
 - **Phase 4b-3** (API-use and null-safety rules).
+- **A real Gradle build of the Phase 5.1 template.** The pins in `templates/versions.py` are documented but untested;
+  a build (for example in the `android-build` image, once it has a JDK and Android SDK) must pass before they are
+  called a tested pair. Needs Person 4's build environment.
 - **More real-project validation** (see Phase 4 limitations): five projects have been reviewed in total, and the
   older rules still showed false positives on two of the newer ones; more are needed before any finding is
   allowed to block a patch in production.
