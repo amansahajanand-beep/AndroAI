@@ -2,8 +2,8 @@
 
 Phase 5.1 ships one template: Kotlin + Jetpack Compose. Rendering is pure and deterministic and
 never touches a workspace; ``PatchEngine`` applies the result. The toolchain versions in
-``versions.py`` were built once (the debug APK of the default project); ``VERIFIED_BUILD`` says
-exactly what that covers, and what it does not.
+``versions.py`` were built (debug and release APK, AAB, lint, ``build``); ``VERIFIED_BUILD`` says
+exactly what that covers, and what it does not (no signing, no tests, one configuration).
 """
 
 from .config import Language, ProjectConfig, UiToolkit

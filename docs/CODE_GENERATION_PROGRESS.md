@@ -9,7 +9,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
 | 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c done** (authentication: 8 new rule ids, 65 tests, 94 of 94 mutations caught; nothing reported on the five real projects unfaulted, 25 of 33 authentication faults injected into them caught, the other 8 silent because the build is not readable enough). **Target SDK resolution done** (a follow-up: `targetSdk` is now also read from a version-catalog entry or a `buildSrc` constant, so the rules that depend on it engage on `iosched` and `sunflower`; 121 tests, 27 of 27 mutations caught, no new finding on the five real projects, 101 of 121 injected faults caught, up from 96). **4b-3 (API use, null safety) not started**. |
-| 5 | New project generation | **In progress. 5.1 done (two local commits on `p3/phase5-templates`, not pushed): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Debug-build verified**: the generated sample project builds with `gradle :app:assembleDebug` in Docker (2026-11-20, AGP 9.5.1, Gradle 9.6.0, Kotlin 2.4.21, Compose BOM 2026.11.01, compileSdk 37.1); release build, lint, tests, emulator and the wrapper were not run. Prompt-driven generation, planning and the worker are not started |
+| 5 | New project generation | **In progress. 5.1 done (three local commits on `p3/phase5-templates`, not pushed): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Build-verified for the default template configuration only** (Docker, 2026-11-20, AGP 9.5.1, Gradle 9.6.0, Kotlin 2.4.21, Compose BOM 2026.11.01, compileSdk 37.1): debug APK, release APK and AAB (both **unsigned**), `build`, `lint` (0 errors, 4 warnings, left as known limitations) and `tasks --all` pass. **No application unit tests exist yet** (`test` passes with nothing to run). No emulator or device run, no signing, no other configuration, no Gradle wrapper. Prompt-driven generation, planning and the worker are not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
 | 8 | Visual editor source mapping | Not started |
@@ -349,15 +349,19 @@ Compose**, single module `:app`. It is a deterministic function from a validated
 no LLM, plans nothing and writes nothing: `PatchEngine` applies the result, so path safety, protection, journal,
 checkpoint and rollback are the existing ones.
 
-> **Verified: one debug build.** On 2026-11-20 the sample project (`Notes App`, `com.example.notes`, default config),
-> rendered through `PatchEngine` into an empty workspace, built with `gradle --no-daemon :app:assembleDebug`
-> (**BUILD SUCCESSFUL**, exit 0, no warnings) in a temporary Docker environment and produced a 13.3 MB debug APK:
-> package `com.example.notes`, versionCode 1, minSdk 24, targetSdk 36, compileSdk 37 (API 37.1), launchable activity
-> `MainActivity`. `templates/versions.py` records this as `VERIFIED_BUILD`, and a test fails if a pin changes without
-> it. **Not run:** a release build, `lint`, unit or instrumented tests, an emulator or device, any other package name
-> or SDK level, and the Gradle wrapper (system Gradle 9.6.0 was used, because the wrapper jar and script are not
-> generated). The Python tests prove structure and internal consistency; only the Gradle build proves the project
-> compiles. The first build of the template as originally pinned **failed** (see "Toolchain decisions").
+> **Verified, for the default configuration only.** On 2026-11-20 the sample project (`Notes App`,
+> `com.example.notes`, default config), rendered through `PatchEngine` into an empty workspace, passed these Gradle
+> commands in a temporary Docker environment (exact commands, exit codes, sizes and hashes under "Phase 5.1
+> verification"): `build`, `assembleDebug`, `assembleRelease`, `bundleRelease`, `lint` (0 errors, 4 warnings), `test`,
+> `tasks --all`, and the Compose Preview run-files tasks. Outputs: a debug APK, an **unsigned** release APK and an
+> **unsigned** release AAB. `templates/versions.py` records this as `VERIFIED_BUILD`, and a test fails if a pin changes
+> without it. **Not verified:** signing (so the release outputs cannot be installed or uploaded as they are), an
+> emulator or device run, any application unit test (**none exists yet**: the app has no logic of its own, so no
+> test was added just to make Gradle report one, and `test` passes with nothing to run), any other package name or SDK
+> level, and the Gradle wrapper (system Gradle 9.6.0 was used, because the wrapper jar and script are not generated).
+> The Python tests prove structure and internal consistency; only the Gradle build proves the project compiles. Two
+> earlier results were failures that changed the template: the first build failed on compileSdk 37.0, and `tasks --all`
+> failed in AGP's Compose Preview task registration (see "Toolchain decisions").
 
 ### Architecture
 
@@ -457,6 +461,22 @@ what the official sources documented on 2026-11-20 (`SOURCES` in `versions.py` h
   the pinned 9.5.1. The build resolved the Kotlin Gradle plugin from AGP's bundled 2.2.10 to 2.4.21 through the
   classpath override, compiled the Kotlin and printed no compatibility warning (`--warning-mode all`). That is evidence
   for this one build, not an official support statement.
+- **Compose Preview task registration, found by `gradle tasks --all`.** `gradle :app:tasks --all` (and requesting
+  `:app:generateDebugComposePreviewRunfiles` directly) failed in AGP 9.5.1 with "Could not create task ... Compose
+  Preview failed ... Android resources are excluded from unit tests (`testOptions.unitTests.isIncludeAndroidResources =
+  false`)"; with only that setting changed, the **release** variant failed with "Unit tests are disabled for this variant
+  (`enableUnitTest = false` in `beforeVariants`)". Normal builds never create those tasks, so `build`, `check`,
+  `assembleRelease`, `bundleRelease`, `lint` and `test` passed regardless; tools that list every task may not have. It
+  is not caused by the `ui-tooling` dependency (removing it changed nothing). **Resolution** in the template's
+  `app/build.gradle.kts`: `testOptions { unitTests { isIncludeAndroidResources = true } }`, and `androidComponents {
+  beforeVariants { variantBuilder -> variantBuilder.hostTests[HostTestBuilder.UNIT_TEST_TYPE]?.enable = true } }` with
+  `import com.android.build.api.variant.HostTestBuilder` (the `variantBuilder.enableUnitTest` named in AGP's own message no
+  longer exists in AGP 9: "Unresolved reference"). With both, `tasks --all` and `build` pass, and the two Compose
+  Preview tasks run when given their output file (`--compose-preview-manifest-file=<path>`, an option the IDE supplies;
+  without it the task fails with "Value not set", by design). **Side effect, checked:** unit tests are now enabled for the
+  release variant too, so `testReleaseUnitTest` exists and runs (`NO-SOURCE`, as there are no tests), and a test later
+  added under `src/test` runs for debug and release. The release APK, the release AAB and the debug APK are
+  **byte-identical** to those built before the change (same SHA-256), and `lint` reports the same four warnings.
 - **The merged APK carries one permission the template does not declare**: `<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`,
   added by the AndroidX libraries' manifest merge. The template's own manifest declares none.
 - **Contract defaults differ.** `AndroidTarget` defaults to 35 and is owned by other people; it was not touched. The
@@ -476,16 +496,38 @@ Person 4):
 | Item | Proposed |
 |---|---|
 | JDK | 17 |
-| Gradle / AGP | 9.6.0 / 9.5.1 (provisional until a build passes) |
+| Gradle / AGP | 9.6.0 / 9.5.1 (built and verified 2026-11-20 for the default template configuration; see `VERIFIED_BUILD`) |
 | Kotlin / Compose BOM | 2.4.21 / 2026.11.01, pinned in `androai_codegen.templates.versions` |
 | compileSdk / targetSdk / minSdk | 37.1 / 36 / 24 for generated projects, with compileSdk written as `compileSdk { version = release(37) { minorApiLevel = 1 } }` (the `AndroidTarget` default of 35 / 35 / 24 does not build with Compose 1.13 and is not accepted for new Play apps; `AndroidTarget` has no minor level) |
 
 ### Limitations
 
-- **Built once, debug only.** See the note at the top of this section for what was and was not built. Everything
-  outside that build (other configs, release, lint, tests, emulator, wrapper) is untested. Both DSL details that were
-  uncertain when this was written built under AGP 9.5.1: `buildFeatures { compose = true }`, and the `compileSdk`
-  block (the plain `compileSdk = 37` form turned out to be the wrong one, see above).
+- **Verified for the default template configuration only.** See the note at the top of this section. Other package
+  names, application IDs, version codes, SDK levels (only min 24 / target 36 / compile 37.1 were built), a build with
+  the Gradle wrapper, an emulator or device run, and signing are untested. Both DSL details that were uncertain when
+  this was written built under AGP 9.5.1: `buildFeatures { compose = true }`, and the `compileSdk` block (the plain
+  `compileSdk = 37` form turned out to be the wrong one, see above).
+- **The release APK and AAB are unsigned.** The template has no signing configuration (nothing secret is generated, and
+  `*.jks`, `*.keystore` and `keystore.properties` are protected files). `apksigner verify` reports the APK as not
+  signed and `jarsigner -verify` finds no manifest in the AAB, so neither can be installed or uploaded to Google Play
+  as it is. Release builds are not shrunk (`isMinifyEnabled = false`), so the release APK is 9.3 MB with two
+  dex files. Signing is a later phase.
+- **No application unit tests exist yet.** The generated app has no logic of its own, so no test was generated: an
+  empty one would only make Gradle list a test. `test`, `testDebugUnitTest` and `testReleaseUnitTest` all pass with
+  `NO-SOURCE`, which verifies nothing about behaviour. Tests belong to the phases that generate real logic.
+- **Lint: 0 errors, 4 warnings, left as known limitations and not suppressed** (same for debug and release):
+  1. `OldTargetApi`: `targetSdk = 36` is not the latest API level (the config allows 37; 36 is what Google Play requires
+     of new apps today, and was a deliberate choice).
+  2. `AndroidGradlePluginVersion`: "a newer version of Gradle than 9.6.0 is available: 9.9.2" (reported on
+     `gradle-wrapper.properties`). 9.6.0 is AGP 9.5's documented minimum and default; other versions were not tried.
+  3. `DataExtractionRules`: `android:allowBackup="false"` is deprecated from Android 12; lint suggests
+     `android:dataExtractionRules`. The backup policy was left as it is.
+  4. `MissingApplicationIcon`: there is no `android:icon` (no launcher icon is generated).
+  Future work: decide each (raise the target, move to a newer Gradle once AGP documents it, add a data-extraction
+  rules file, generate a launcher icon). None of the four affects the build.
+- **"Unable to strip ... libandroidx.graphics.path.so"** appears in release builds in the validation image because it
+  has no NDK (`/sdk/ndk` is absent, "missing strip tool for ABI"); the native library is packaged unstripped. It is
+  environmental, not a template problem, and disappears if the build image installs the NDK AGP asks for.
 - The template writes `minSdk = N` and `targetSdk = N` as integers, which the review reads. Whether AGP 9 offers
   `minSdk { }` / `targetSdk { }` block forms was not checked; they are neither generated nor read by the review.
 - Single module, no flavors, no signing configuration, no `local.properties` (protected), no secrets.
@@ -945,17 +987,18 @@ mutations are caught, and the original 22 4a mutations still are.
   readability gates described under 4b-2c (AppAuth and Credential Manager on four projects), `AntennaPod`'s `app`
   target in a shared script and its cleartext configuration, and the older 4b-1 and 4b-2a cases.
 
-### Phase 5.1 verification (project templates; `p3/phase5-templates`, two local commits on top of `467b82f`)
+### Phase 5.1 verification (project templates; `p3/phase5-templates`, three local commits on top of `467b82f`)
 
 | Check | Result |
 |---|---|
-| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen` | 1495 passed, 5 skipped, 1 xfailed (the 964 / 5 / 1 of `467b82f` plus 531 new tests) |
-| Linux (WSL Ubuntu, Python 3.14.4, ext4), same suite from a fresh export of the working tree | 1499 passed, 1 skipped, 1 xfailed |
+| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen` | 1503 passed, 5 skipped, 1 xfailed (the 964 / 5 / 1 of `467b82f` plus 539 new tests) |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4), same suite from a fresh export of the working tree | 1507 passed, 1 skipped, 1 xfailed |
 | `ruff check`, `ruff format --check`, `compileall` | clean on both platforms |
-| New tests | 531 in six files: validation 206, config 96, render 59, Kotlin/Compose template 83, patch and review compatibility 40, review of the `compileSdk` block 47 |
+| New tests | 539 in six files: validation 206, config 96, render 59, Kotlin/Compose template 91, patch and review compatibility 40, review of the `compileSdk` block 47 |
 | Mutation testing (each mutation must fail a test) | Templates: 120 of 120 caught (the first run caught 114 of 115; the survivor changed the JDK pin, so a test of AGP 9.5's JDK 17 floor was added). `compileSdk` 37.1 work: 41 of 41 caught (36 on the first run: four patterns did not match because the tracked files use CRLF, and one mutant was equivalent under the current pins until a test with a widened minor range pinned it) |
 | Review engine on five real projects (nowinandroid, iosched, sunflower, platform-samples, AntennaPod), `467b82f` against the working tree | Identical reports (same 37 lines, same findings; none from `gradle.sdk_order`, `change.sdk_changed` or an internal error). None of the five uses the `compileSdk` block, so no behaviour changes there, as expected |
-| **Gradle build of the generated project** | **First build FAILED, second build SUCCEEDED** (below) |
+| Mutation testing of the Compose Preview regression tests | 15 of 15 caught (import removed, doubled or wrong; `testOptions` removed; Android resources off; `androidComponents` removed, reordered, filtered to debug, disabled or using the removed `enableUnitTest`; a test dependency or test stub added; unbalanced brace; signing config or flavors added). One mutation survived once because it was too subtle to change the generated blocks; it was redone as a real reordering and caught |
+| **Gradle builds of the generated project** | **Two failures that changed the template, then every command below passed** (below) |
 
 The 5 Windows skips and the Linux skip are the existing platform-specific tests listed below; the xfail is the existing
 one. The new tests need no `git` except one `CheckpointManager` test, which skips without it.
@@ -975,11 +1018,45 @@ Build 2 produced `app/build/outputs/apk/debug/app-debug.apk` (13,314,159 bytes, 
 `com.example.notes`, versionCode 1, versionName `1.0`, minSdk 24, targetSdk 36, compileSdk 37 (API 37.1, which `aapt2`
 prints as 37), launchable activity `com.example.notes.MainActivity`, label `Notes App`, debuggable, AGP 9.5.1 recorded in
 the APK's app-metadata. Resolved by Gradle: Kotlin Gradle plugin 2.2.10 (AGP's own) replaced by 2.4.21, Compose compiler
-plugin 2.4.21, Compose BOM 2026.11.01 (ui 1.13.0, material3 1.5.0), activity-compose 1.13.0. Two throwaway
-copies of the first project (one with the block form of `compileSdk`, one with BOM 2026.09.00 and a plain
-`compileSdk = 37`) had already built before the template was changed; the APK of the first is byte-identical to build 2's.
-Only the debug build was run: **not** `assembleRelease`, `lint`, unit or instrumented tests, an emulator or device, other
-package names or SDK levels, or the wrapper.
+plugin 2.4.21, Compose BOM 2026.11.01 (ui 1.13.0, material3 1.5.0), activity-compose 1.13.0.
+
+**Release, lint, test and the Compose Preview fix.** Build 2's template was then checked with the commands below (same
+image; `G` = `gradle --no-daemon --console=plain --stacktrace --warning-mode all`; project A and project B are two fresh
+renders through `PatchEngine`; A ran `build` on an empty tree, B ran the other commands). The first four rows are the
+checks of the earlier template (`bb79a76`, before the Compose Preview fix); the rest are the template of the third commit.
+
+| Template | Command | Exit | Result |
+|---|---|---|---|
+| `bb79a76` | `G :app:assembleRelease` | 0 | BUILD SUCCESSFUL, 47 tasks, 1m38s; includes `lintVitalRelease` |
+| `bb79a76` | `G :app:bundleRelease` | 0 | BUILD SUCCESSFUL, 50 tasks, 19s |
+| `bb79a76` | `G lint` / `G :app:lintRelease` | 0 / 0 | 0 errors, 4 warnings each |
+| `bb79a76` | `gradle ... :app:tasks --all` and `G :app:generateDebugComposePreviewRunfiles` | **1 / 1** | "Could not create task ... Android resources are excluded from unit tests"; with only that setting changed the release variant failed too ("Unit tests are disabled for this variant"); also `G :app:testReleaseUnitTest` exit 1, the task did not exist |
+| third commit | `G build` (A, empty tree) | 0 | BUILD SUCCESSFUL, 105 tasks, 1m17s; unit-test tasks `NO-SOURCE` for debug and release |
+| third commit | `G tasks --all` and `G :app:tasks --all` | 0 / 0 | the Compose Preview tasks are created and listed for both variants |
+| third commit | `G :app:generateDebugComposePreviewRunfiles` and the release one, **with no option** | **1 / 1** | "Value not set: `composePreviewManifestFile`" / "Missing required option --compose-preview-manifest-file=<path>": the task needs an output path, which the IDE gives it (`gradle help --task` documents the option); this is not a build task |
+| third commit | the same two tasks with `--compose-preview-manifest-file=<path>` | 0 / 0 | BUILD SUCCESSFUL; wrote a 16,756-byte (debug) and a 16,308-byte (release) manifest JSON naming the package, the resource APK of the unit-test packaging task and the classpath |
+| third commit | `G assembleDebug` | 0 | BUILD SUCCESSFUL, 36 tasks, 25s |
+| third commit | `G assembleRelease` | 0 | BUILD SUCCESSFUL, 47 tasks, 39s |
+| third commit | `G bundleRelease` | 0 | BUILD SUCCESSFUL, 50 tasks (10 executed), 13s |
+| third commit | `G lint` and `G :app:lintRelease` | 0 / 0 | **0 errors, 4 warnings** each (the same four, below) |
+| third commit | `G test`, `G :app:testDebugUnitTest`, `G :app:testReleaseUnitTest` | 0 / 0 / 0 | all `NO-SOURCE`: there are no unit tests, so nothing was run |
+
+Artifacts (the third commit's template; byte-identical to those built before the Compose Preview fix, so the fix changed
+nothing that ships):
+
+| File | Bytes | SHA-256 |
+|---|---|---|
+| `app-release-unsigned.apk` | 9,340,718 | `d7609b6c071d8809ddccff984463502a8e494f2d1030fcbe88973769a876b25a` |
+| `app-release.aab` | 8,960,611 | `1170650e74ada1a0498365b85119724cee33c0c1de3a434f74952cf2856799c4` |
+| `app-debug.apk` | 13,314,159 | `834ac58385d0e8459cbb29c7d933044fb9cb2301704c2a8369c8002f3097e26b` |
+
+Release APK: `com.example.notes`, versionCode 1, `1.0`, minSdk 24, targetSdk 36, compileSdk 37, launchable
+`MainActivity`, not debuggable, zipalign check OK, **unsigned** (`apksigner verify`: DOES NOT VERIFY, missing
+META-INF/MANIFEST.MF). Release AAB: `BundleConfig.pb`, one base module (manifest, two dex files, resources, four ABI
+libraries), **unsigned** (`jarsigner -verify`: no manifest). Warnings in all logs: only "Unable to strip ...
+libandroidx.graphics.path.so" (no NDK in the image; see Limitations). Throwaway copies of the first project (one with the
+block form of `compileSdk`, one with BOM 2026.09.00 and a plain `compileSdk = 37`) had also built before the template
+was changed. The Dockerfile, image and volumes stay outside the repository.
 
 What the template tests cover: valid and invalid package names (including every Kotlin hard keyword and Java reserved
 word, Windows device names, leading/trailing/double dots, uppercase, non-ASCII, control characters), application IDs,
@@ -1014,6 +1091,13 @@ comments and strings ignored, `preview(...)`, variables, arithmetic and unclosed
 `gradle.sdk_order` on the block (target above compile, min above target, an equal target under 37.1 in order, unreadable
 block silent, warnings not blocking), `change.sdk_changed` (lowered API level, 37.1 to 37.0, whole number to block), and the
 rendered project's own SDK levels read back by the review.
+
+The Compose Preview fix adds regression tests for: `testOptions { unitTests { isIncludeAndroidResources = true } }`
+inside the `android` block; the `androidComponents` block using the AGP 9 host-test API for every variant (no variant
+singled out, and the removed `enableUnitTest` absent); the `HostTestBuilder` import once, on the first line, before
+`plugins`; the order of the four top-level blocks; balanced braces, parentheses and brackets in every Gradle script; **no
+generated unit-test source or test dependency**; and that nothing else about the module changed (release still not
+shrunk, no signing configuration, flavors or extra build type). The rendered project still has no review finding.
 
 Not done for 5.1: fault injection into the five real projects (the real-project run above is a before-and-after
 comparison of unmodified projects); the contracts, worker and CI suites (nothing there was touched). `pyproject.toml`
@@ -1261,21 +1345,25 @@ Phase 4b-2c (authentication):
     `Image`, `RadioButton`, `Snackbar`); another such name used with a wildcard import of its framework package would
     still be reported until it is added. The probe that found these checked twenty well-known names, not every class.
 
-Phase 5.1 (project templates): see "Project templates (Phase 5.1)" above. In short: the default project's **debug build
-was verified once** with Gradle (the first build failed on compileSdk 37.0 and was fixed with API 37.1); release, lint,
-tests, emulator, other configs and the wrapper are untested, there is one template (Kotlin + Compose, one module), the
-wrapper jar and scripts are not generated, and two kinds of breakage in a generated project are not caught by the review
-(they are covered by the template tests instead).
+Phase 5.1 (project templates): see "Project templates (Phase 5.1)" above. In short: the default project's debug build,
+release build, AAB, `lint` (0 errors, 4 warnings) and `tasks --all` pass with Gradle, after two failures that changed
+the template (compileSdk 37.0 needed API 37.1; AGP's Compose Preview tasks needed Android resources and unit tests
+enabled for every variant). The release APK and AAB are **unsigned**; **no application unit tests exist yet**; the four
+lint warnings are known limitations; only the default configuration was built (no emulator, no other package or SDK
+level, no Gradle wrapper); there is one template (Kotlin + Compose, one module); the wrapper jar and scripts are not
+generated; and two kinds of breakage in a generated project are not caught by the review (they are covered by the
+template tests instead).
 
 ## Unfinished integration work
 
 Not done:
 
 - **Phase 4b-3** (API-use and null-safety rules).
-- **More builds of the Phase 5.1 template.** Only the debug build of the default project was run (in a temporary Docker
-  image kept outside the repository). Still to do: `assembleRelease`, `lint`, the unit-test task, an emulator run, other
-  package names and SDK levels, and a build with the Gradle wrapper. That belongs in the `android-build` image, which
-  needs a JDK and the Android SDK (platform 37.1, build-tools 36.0.0): Person 4's environment.
+- **More builds of the Phase 5.1 template.** Debug, release, bundle, `lint` and `tasks --all` of the default project
+  were run (in a temporary Docker image kept outside the repository). Still to do: signing the release outputs, an
+  emulator or device run, other package names and SDK levels, a build with the Gradle wrapper, and application unit
+  tests once generated code has logic to test. That belongs in the `android-build` image, which needs a JDK and the
+  Android SDK (platform 37.1, build-tools 36.0.0, ideally the NDK): Person 4's environment.
 - **More real-project validation** (see Phase 4 limitations): five projects have been reviewed in total, and the
   older rules still showed false positives on two of the newer ones; more are needed before any finding is
   allowed to block a patch in production.

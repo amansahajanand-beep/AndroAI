@@ -251,6 +251,107 @@ def test_app_build_gradle(files):
     assert "isMinifyEnabled = false" in app
 
 
+# --- Compose Preview task registration (AGP 9.5.1) ------------------------------------------
+#
+# Without ``testOptions.unitTests.isIncludeAndroidResources = true`` and host (unit) tests enabled
+# for every variant, Gradle cannot create AGP's ``generate<Variant>ComposePreviewRunfiles`` tasks,
+# so ``gradle tasks --all`` fails ("Could not create task"). Real Gradle builds of these settings
+# are in the progress document; these tests keep the text that was built from silently changing.
+
+
+def top_level_blocks(text: str) -> dict[str, str]:
+    """Body of every ``name { ... }`` block that opens and closes in column 0."""
+    blocks: dict[str, str] = {}
+    name, body = None, []
+    for line in text.split("\n"):
+        if name is None:
+            match = re.fullmatch(r"(\w+) \{", line)
+            if match:
+                name, body = match.group(1), []
+        elif line == "}":
+            blocks[name] = "\n".join(body)
+            name = None
+        else:
+            body.append(line)
+    assert name is None, f"block {name} is not closed"
+    return blocks
+
+
+def test_unit_tests_get_android_resources_inside_the_android_block(files):
+    android = top_level_blocks(files["app/build.gradle.kts"])["android"]
+    assert (
+        "    testOptions {\n"
+        "        unitTests {\n"
+        "            isIncludeAndroidResources = true\n"
+        "        }\n"
+        "    }\n"
+    ) in android + "\n"
+
+
+def test_unit_tests_are_enabled_for_every_variant_with_the_agp_9_host_test_api(files):
+    app = files["app/build.gradle.kts"]
+    blocks = top_level_blocks(app)
+    assert blocks["androidComponents"].split("\n") == [
+        "    beforeVariants { variantBuilder ->",
+        "        variantBuilder.hostTests[HostTestBuilder.UNIT_TEST_TYPE]?.enable = true",
+        "    }",
+    ]
+    # No variant is singled out (release needs the tests enabled as much as debug does).
+    for variant_filter in ("if (", " when", "buildType", "name ==", "name.", "debug", "release"):
+        assert variant_filter not in blocks["androidComponents"], variant_filter
+
+
+def test_the_host_test_builder_is_imported_once_at_the_top_of_the_file(files):
+    lines = files["app/build.gradle.kts"].split("\n")
+    assert lines[0] == "import com.android.build.api.variant.HostTestBuilder"
+    assert lines[1] == "" and lines[2] == "plugins {"
+    assert sum(line.startswith("import ") for line in lines) == 1
+
+
+def test_the_android_components_block_follows_the_android_block_and_precedes_dependencies(files):
+    app = files["app/build.gradle.kts"]
+    order = [
+        app.index(f"\n{name} {{\n") for name in ("android", "androidComponents", "dependencies")
+    ]
+    assert order == sorted(order)
+    assert list(top_level_blocks(app)) == [
+        "plugins",
+        "android",
+        "androidComponents",
+        "dependencies",
+    ]
+
+
+def test_the_removed_enable_unit_test_api_is_not_used(files):
+    # ``variantBuilder.enableUnitTest`` is gone in AGP 9 (a real build: "Unresolved reference").
+    assert "enableUnitTest" not in files["app/build.gradle.kts"]
+
+
+def test_no_unit_test_source_or_test_dependency_is_generated(files):
+    # The generated app has no business logic yet; an empty test would only make Gradle list tests.
+    assert not [p for p in files if p.startswith(("app/src/test/", "app/src/androidTest/"))]
+    app = files["app/build.gradle.kts"]
+    for configuration in ("testImplementation", "androidTestImplementation", "testRuntimeOnly"):
+        assert configuration not in app
+
+
+def test_every_brace_and_parenthesis_of_the_gradle_scripts_is_balanced(files):
+    for path, text in files.items():
+        if path.endswith(".kts"):
+            assert text.count("{") == text.count("}"), path
+            assert text.count("(") == text.count(")"), path
+            assert text.count("[") == text.count("]"), path
+
+
+def test_the_preview_settings_do_not_change_what_the_other_variants_get(files):
+    # The unit-test settings are the only additions to the module: the release type still does not
+    # shrink, still has no signing configuration, and no flavor or extra build type appeared.
+    app = files["app/build.gradle.kts"]
+    assert "isMinifyEnabled = false" in app
+    for absent in ("signingConfig", "productFlavors", "isShrinkResources", "isDebuggable"):
+        assert absent not in app
+
+
 def test_an_explicit_application_id_and_version_reach_the_app_module():
     app = {
         f.path: f.content
@@ -309,7 +410,15 @@ def test_the_pins_are_the_ones_that_were_built():
         config.target_sdk,
     )
     assert VERIFIED_BUILD["compile_sdk"] == config.compile_sdk_full
-    assert VERIFIED_BUILD["task"] == ":app:assembleDebug"
+    tasks = VERIFIED_BUILD["tasks"]
+    assert isinstance(tasks, tuple)
+    for task in ("build", "assembleDebug", "assembleRelease", "bundleRelease", "lint", "test"):
+        assert task in tasks, task
+    assert "tasks --all" in tasks  # the Compose Preview registration must keep working
+    # What is not claimed: nothing says the outputs are signed, or that an emulator or a test ran.
+    claim = str(VERIFIED_BUILD["outputs"]) + " ".join(tasks)
+    for not_verified in ("emulator", "connected", "signed release", "testDebugUnitTest"):
+        assert not_verified not in claim.replace("unsigned", ""), not_verified
     assert TOOLCHAIN.min_sdk_floor <= 24 <= 36 <= TOOLCHAIN.compile_sdk_min
 
 

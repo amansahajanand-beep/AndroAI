@@ -1,15 +1,19 @@
 """The one place where the toolchain of a generated project is pinned.
 
 Every value below was read from an official source on 2026-11-20 (see ``SOURCES``) and then built:
-``VERIFIED_BUILD`` records the one build that passed. **Only that was verified**: the debug APK of
-the project generated from the default config. Not built or run: a release build, lint, tests, an
-emulator or device, other package names or SDK levels, or the Gradle wrapper (system Gradle was
-used).
+``VERIFIED_BUILD`` records the Gradle tasks that passed for the project generated from the default
+config. **Only that was verified.** Not built or run: signing (the release APK and AAB are
+unsigned), an emulator or device, other package names or SDK levels, the Gradle wrapper (system
+Gradle was used), or any test (the generated app has none yet: ``test`` passes with nothing to run).
 
 The first build, with ``compileSdk = 37``, failed in ``checkDebugAarMetadata``: the pinned Compose
 1.13.0 libraries declare ``minCompileSdk=37`` *and* ``minCompileMinorSdk=1``, i.e. they must be
 compiled against API **37.1**, and an integer ``compileSdk = 37`` means API 37.0.
 ``compile_sdk_*_minor`` and the ``compileSdk`` block of the template exist for that reason.
+
+A later check found that AGP 9.5.1 cannot create its Compose Preview tasks (``gradle tasks
+--all`` failed) unless unit tests include Android resources and are enabled for every variant;
+``testOptions`` and ``androidComponents`` in the template's ``app/build.gradle.kts`` fix that.
 
 To change a version, change it here (and in ``docs/COMPATIBILITY_MATRIX.md`` once the team
 approves), then rebuild and update ``VERIFIED_BUILD``: a test fails while the two disagree. Nothing
@@ -68,8 +72,19 @@ DEFAULT_COMPILE_SDK_MINOR = 1
 
 # The build that passed (a generated project, default config). Keep in step with ``TOOLCHAIN``: a
 # test compares them, so a bumped pin cannot silently keep claiming to be verified.
-VERIFIED_BUILD: dict[str, str | int] = {
-    "task": ":app:assembleDebug",
+VERIFIED_BUILD: dict[str, str | int | tuple[str, ...]] = {
+    "tasks": (
+        "build",
+        "assembleDebug",
+        "assembleRelease",
+        "bundleRelease",
+        "lint",
+        "test",
+        "tasks --all",
+        ":app:generateDebugComposePreviewRunfiles --compose-preview-manifest-file=<path>",
+        ":app:generateReleaseComposePreviewRunfiles --compose-preview-manifest-file=<path>",
+    ),
+    "outputs": "debug APK, unsigned release APK, unsigned release AAB; lint 0 errors 4 warnings",
     "date": "2026-11-20",
     "environment": "Docker (Linux), eclipse-temurin 17.0.21, system Gradle 9.6.0, Android SDK "
     "platform 37.1 and build-tools 36.0.0, cmdline-tools 15859902",

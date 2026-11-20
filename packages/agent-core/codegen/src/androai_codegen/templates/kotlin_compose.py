@@ -10,8 +10,10 @@ AGP 9 and is therefore not written out. ``compileSdk`` is written as the AGP 9 b
 pinned Compose libraries must be compiled against API 37.1 and ``compileSdk = 37`` means API 37.0
 (``compileSdk { version = release(37) { minorApiLevel = 1 } }``).
 
-The default project built with Gradle (see ``VERIFIED_BUILD`` in ``versions.py``): the debug APK,
-nothing more.
+The default project was built with Gradle (see ``VERIFIED_BUILD`` in ``versions.py`` for what ran).
+``app/build.gradle.kts`` also enables Android resources and host (unit) tests for every variant: AGP
+9.5.1 otherwise fails to create its Compose Preview tasks, so ``gradle tasks --all`` fails. No
+generated unit test exists.
 """
 
 from __future__ import annotations
@@ -96,7 +98,9 @@ zipStoreBase=GRADLE_USER_HOME
 zipStorePath=wrapper/dists
 """
 
-_APP_BUILD_GRADLE = r"""plugins {
+_APP_BUILD_GRADLE = r"""import com.android.build.api.variant.HostTestBuilder
+
+plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
@@ -134,6 +138,22 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    // AGP 9 creates Compose Preview tasks for every variant. They need the Android resources in
+    // unit tests (here) and unit tests enabled for every variant (androidComponents, below).
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+}
+
+// Without the two settings, creating all tasks (`gradle tasks --all`) fails in the Compose Preview
+// task registration. Unit tests are enabled for the release variant too; no test exists yet.
+androidComponents {
+    beforeVariants { variantBuilder ->
+        variantBuilder.hostTests[HostTestBuilder.UNIT_TEST_TYPE]?.enable = true
     }
 }
 
