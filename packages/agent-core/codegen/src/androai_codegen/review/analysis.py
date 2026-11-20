@@ -1,0 +1,805 @@
+"""Project-wide facts, computed lazily and shared by every rule."""
+
+from __future__ import annotations
+
+import re
+from collections import defaultdict
+from dataclasses import dataclass
+from functools import cached_property
+
+from .catalog import COMPONENT_BASES, KNOWN_PLUGIN_PREFIXES, TEST_SOURCE_SETS
+from .gradle import Dependency, GradleScript, VersionCatalog, _accessor, parse_catalog
+from .models import ReviewConfig, ReviewTarget
+from .project import ProjectFiles
+from .proto import generated_classes
+from .resources import ResourceIndex
+from .source import SourceFile, TypeDecl, matching_close
+from .xmlparse import DOCTYPE_REFUSED, XmlDoc, XmlNode, parse_xml
+
+COMPONENT_TAGS = ("activity", "activity-alias", "service", "receiver", "provider")
+_XML_PROLOG_AND_COMMENTS = re.compile(r"<\?.*?\?>|<!--.*?-->", re.DOTALL)
+_BUILD_SOURCE = re.compile(r"(?:^|/)(?:buildSrc|build-logic)/")
+_OBJECT = re.compile(r"\bobject[ \t]+([A-Za-z_]\w*)[ \t]*\{")
+_CONST = re.compile(
+    r'\bconst[ \t]+val[ \t]+([A-Za-z_]\w*)[ \t]*(?::[ \t]*String[ \t]*)?=[ \t]*"([^"\n]*)"'
+)
+# ``const val TARGET_SDK = 34`` (or a ``val`` inside an ``object``): a whole number, nothing else
+_INT_CONST = re.compile(
+    r"\b(?P<const>const[ \t]+)?val[ \t]+(?P<name>[A-Za-z_]\w*)[ \t]*(?::[ \t]*Int[ \t]*)?"
+    r"=[ \t]*(?P<value>\d+)[ \t]*(?:;|$)",
+    re.MULTILINE,
+)
+# ``targetSdk = <expression>`` / ``targetSdkVersion <expression>``: the rest of the line
+_TARGET_SDK_EXPRESSION = re.compile(r"\btargetSdk(?:Version)?\b[ \t]*=?[ \t]*([^\n;]+)")
+_CATALOG_VERSION = r"libs\.versions\.([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.get\(\)"
+# the only two shapes of a catalog version used as a number that are read: ``.get().toInt()`` /
+# ``.get().toInteger()`` and ``Integer.parseInt(...get())`` / ``Integer.valueOf(...get())``
+_SDK_AS_NUMBER = re.compile(rf"{_CATALOG_VERSION}\.(?:toInt|toInteger)\(\)")
+_SDK_PARSED = re.compile(
+    rf"(?:java\.lang\.)?Integer\.(?:parseInt|valueOf)\([ \t]*{_CATALOG_VERSION}[ \t]*\)"
+)
+
+
+class SymbolIndex:
+    """Declarations across all Kotlin/Java sources."""
+
+    def __init__(self, sources: dict[str, SourceFile]) -> None:
+        self.by_fqn: dict[str, list[tuple[str, TypeDecl]]] = defaultdict(list)
+        self.packages: set[str] = set()
+        self.top_names: dict[str, set[str]] = defaultdict(set)
+        self.cap_names: dict[str, list[str]] = defaultdict(list)
+        self.fun_names: set[str] = set()
+        for path, source in sources.items():
+            package = source.package
+            self.packages.add(package)
+            for decl in source.types:
+                self.by_fqn[decl.fqn].append((path, decl))
+                if decl.top_level and not decl.private:
+                    self.top_names[package].add(decl.name)
+                    self._add_cap(decl.name, decl.fqn)
+            for function in source.functions:
+                self.fun_names.add(function.name)
+                if function.top_level and not function.private:
+                    self.top_names[package].add(function.name)
+                    if function.name[:1].isupper():
+                        self._add_cap(
+                            function.name,
+                            f"{package}.{function.name}" if package else function.name,
+                        )
+            self.top_names[package].update(source.top_level_values)
+
+    def _add_cap(self, name: str, fqn: str) -> None:
+        if fqn not in self.cap_names[name]:
+            self.cap_names[name].append(fqn)
+
+    def has_type(self, fqn: str) -> bool:
+        return fqn in self.by_fqn
+
+
+@dataclass(frozen=True)
+class Component:
+    kind: str  # application | activity | activity-alias | service | receiver | provider
+    name: str  # as written
+    fqn: str  # resolved against the package
+    line: int
+    exported: str | None
+    has_intent_filter: bool
+    is_launcher: bool
+    target_activity: str | None = None  # for activity-alias
+
+
+@dataclass
+class ManifestInfo:
+    path: str
+    package: str | None
+    root: XmlNode
+    permissions: list[tuple[str, int]]
+    components: list[Component]
+    application: XmlNode | None
+
+
+@dataclass(frozen=True)
+class ResolvedDependency:
+    dep: Dependency
+    group: str | None
+    artifact: str | None
+    version: str | None
+    unresolved_alias: bool = False
+
+    @property
+    def coordinate(self) -> str | None:
+        return f"{self.group}:{self.artifact}" if self.group and self.artifact else None
+
+
+@dataclass(frozen=True)
+class ProjectDependency:
+    """A dependency of one module on another module of the same build."""
+
+    source: str  # directory of the module whose script declares it
+    target: str | None  # directory of the module it points at; None if it is not included
+    reference: str  # as written: ":core:data" or "projects.core.dataTest"
+    config: str
+    path: str  # the build script
+    line: int
+
+
+def _camel(segment: str) -> str:
+    """Gradle's typesafe accessor name of a project path segment: ``data-test`` -> ``dataTest``."""
+    return re.sub(r"[-_]+([A-Za-z0-9])", lambda m: m.group(1).upper(), segment)
+
+
+def parse_version(text: str) -> tuple[int, ...] | None:
+    """``"2.0.21-1.0.28"`` -> ``(2, 0, 21)``; ``None`` if it does not start with a number."""
+    match = re.match(r"\d+(?:\.\d+)*", text.strip())
+    return tuple(int(part) for part in match.group(0).split(".")) if match else None
+
+
+def _resolve_class(name: str, package: str | None) -> str:
+    if name.startswith("."):
+        return f"{package}{name}" if package else name[1:]
+    if "." not in name:
+        return f"{package}.{name}" if package else name
+    return name
+
+
+class ProjectAnalysis:
+    def __init__(
+        self, files: ProjectFiles, config: ReviewConfig, target: ReviewTarget | None = None
+    ) -> None:
+        self.files = files
+        self.config = config
+        self.target = target or ReviewTarget()
+
+    # -- parsed files -------------------------------------------------------------------
+
+    @cached_property
+    def sources(self) -> dict[str, SourceFile]:
+        return {
+            path: SourceFile(path, text)
+            for path, text in sorted(self.files.texts.items())
+            if path.endswith((".kt", ".java"))
+        }
+
+    @cached_property
+    def gradle_scripts(self) -> dict[str, GradleScript]:
+        return {
+            path: GradleScript(path, text)
+            for path, text in sorted(self.files.texts.items())
+            if path.endswith((".gradle", ".kts"))
+        }
+
+    @cached_property
+    def xml_docs(self) -> dict[str, XmlDoc]:
+        return {
+            path: parse_xml(text)
+            for path, text in sorted(self.files.texts.items())
+            if path.endswith(".xml")
+        }
+
+    @cached_property
+    def proto_types(self) -> frozenset[str]:
+        """Classes generated from the project's ``.proto`` files (importable, not in sources)."""
+        found: set[str] = set()
+        for path, text in self.files.texts.items():
+            if path.endswith(".proto"):
+                found |= generated_classes(path, text)
+        return frozenset(found)
+
+    @cached_property
+    def template_xml(self) -> frozenset[str]:
+        """XML files holding only a prolog and comments (e.g. a license-header template).
+
+        They have no root element on purpose and are not read by Android, so "no element found"
+        is not an error for them. Resource files and manifests are excluded: a rootless file
+        there does break the build.
+        """
+        found = set()
+        for path, doc in self.xml_docs.items():
+            if not doc.error or path.endswith("AndroidManifest.xml") or "/res/" in f"/{path}":
+                continue
+            if not _XML_PROLOG_AND_COMMENTS.sub("", self.files.texts[path]).strip():
+                found.add(path)
+        return frozenset(found)
+
+    @cached_property
+    def refused_xml(self) -> frozenset[str]:
+        """Well-formed XML we refuse to parse because it has a DOCTYPE, outside ``res/`` and the
+        manifest (tool configuration such as ``checkstyle.xml``). It is not Android input, so
+        refusing it is not a project error; it stays listed as unparsed."""
+        return frozenset(
+            path
+            for path, doc in self.xml_docs.items()
+            if doc.error
+            and doc.error.message == DOCTYPE_REFUSED
+            and not path.endswith("AndroidManifest.xml")
+            and "/res/" not in f"/{path}"
+        )
+
+    @cached_property
+    def catalog_path(self) -> str | None:
+        found = [p for p in self.files.texts if p.endswith("libs.versions.toml")]
+        return sorted(found)[0] if found else None
+
+    @cached_property
+    def catalog(self) -> VersionCatalog | None:
+        return parse_catalog(self.files.texts[self.catalog_path]) if self.catalog_path else None
+
+    @cached_property
+    def custom_catalogs(self) -> bool:
+        """The build defines version catalogs other than the default ``libs`` one.
+
+        ``create("libs") { from(files("../gradle/libs.versions.toml")) }`` (what an included build
+        does to share the root catalog) is the default catalog, not a custom one. A second name,
+        a remote ``from("group:artifact:version")`` or a block we cannot read counts as custom.
+        """
+        for script in self.gradle_scripts.values():
+            if "versionCatalogs" not in script.masked:
+                continue
+            declared = script.catalog_declarations
+            if not declared or any(name != "libs" or not local for name, local in declared):
+                return True
+        return False
+
+    # -- indexes ------------------------------------------------------------------------
+
+    @cached_property
+    def symbols(self) -> SymbolIndex:
+        return SymbolIndex(self.sources)
+
+    @cached_property
+    def resources(self) -> ResourceIndex:
+        generated = [rv for script in self.gradle_scripts.values() for rv in script.res_values]
+        return ResourceIndex(self.files.paths, self.xml_docs, generated)
+
+    # -- modules ------------------------------------------------------------------------
+
+    @cached_property
+    def modules(self) -> frozenset[str]:
+        """Module directories. A directory with a build script is a module, except that in a
+        multi-module build (root ``settings`` with ``include``) the root itself is not one and
+        neither is anything inside an ``includeBuild`` (e.g. ``build-logic``), which is a
+        separate build. Included projects count even without a build script."""
+        found = set()
+        for path in self.gradle_scripts:
+            name = path.rsplit("/", 1)[-1]
+            if name in ("build.gradle", "build.gradle.kts"):
+                found.add(path.rsplit("/", 1)[0] if "/" in path else "")
+        settings = self.gradle_scripts.get("settings.gradle.kts") or self.gradle_scripts.get(
+            "settings.gradle"
+        )
+        if settings is None or not settings.includes:
+            return frozenset(found)
+        separate = [*settings.included_builds, "buildSrc"]  # buildSrc is an implicit build
+        found = {
+            m for m in found if m and not any(m == b or m.startswith(b + "/") for b in separate)
+        }
+        return frozenset(found | set(settings.includes))
+
+    def module_of(self, path: str) -> str | None:
+        parts = path.split("/")[:-1]
+        for end in range(len(parts), -1, -1):
+            candidate = "/".join(parts[:end])
+            if candidate in self.modules:
+                return candidate
+        return None
+
+    def source_set(self, path: str) -> str:
+        parts = path.split("/")
+        if "src" in parts:
+            index = parts.index("src")
+            if index + 1 < len(parts) - 1:
+                return parts[index + 1]
+        return ""
+
+    @cached_property
+    def module_namespaces(self) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for module in self.modules:
+            prefix = f"{module}/" if module else ""
+            for name in ("build.gradle.kts", "build.gradle"):
+                script = self.gradle_scripts.get(prefix + name)
+                if script and script.namespace:
+                    result[module] = script.namespace[0]
+                    break
+            else:
+                info = self.manifests.get(f"{prefix}src/main/AndroidManifest.xml")
+                if info and info.package:
+                    result[module] = info.package
+        return result
+
+    def namespace_for(self, path: str) -> str | None:
+        module = self.module_of(path)
+        if module is not None and module in self.module_namespaces:
+            return self.module_namespaces[module]
+        return self.target.package_name
+
+    @cached_property
+    def all_namespaces(self) -> frozenset[str]:
+        names = set(self.module_namespaces.values())
+        if self.target.package_name:
+            names.add(self.target.package_name)
+        return frozenset(names)
+
+    # -- manifests ----------------------------------------------------------------------
+
+    @cached_property
+    def manifests(self) -> dict[str, ManifestInfo]:
+        found: dict[str, ManifestInfo] = {}
+        for path, doc in self.xml_docs.items():
+            if (
+                not path.endswith("AndroidManifest.xml")
+                or not doc.root
+                or doc.root.tag != "manifest"
+            ):
+                continue
+            root = doc.root
+            package = root.attrs.get("package")
+            application = next(iter(root.child_nodes("application")), None)
+            permissions = [
+                (node.attrs["android:name"], node.line)
+                for node in root.iter()
+                if node.tag in ("uses-permission", "uses-permission-sdk-23")
+                and "android:name" in node.attrs
+            ]
+            components: list[Component] = []
+            if application is not None:
+                if application.attrs.get("android:name"):
+                    components.append(self._component(application, "application", package))
+                for node in application.children:
+                    if node.tag in COMPONENT_TAGS and node.attrs.get("android:name", "x"):
+                        components.append(self._component(node, node.tag, package))
+            found[path] = ManifestInfo(path, package, root, permissions, components, application)
+        return found
+
+    def _component(self, node: XmlNode, kind: str, package: str | None) -> Component:
+        name = node.attrs.get("android:name", node.attrs.get("android:targetActivity", ""))
+        filters = node.child_nodes("intent-filter")
+        launcher = False
+        for intent_filter in filters:
+            actions = {a.attrs.get("android:name") for a in intent_filter.child_nodes("action")}
+            categories = {
+                c.attrs.get("android:name") for c in intent_filter.child_nodes("category")
+            }
+            if (
+                "android.intent.action.MAIN" in actions
+                and "android.intent.category.LAUNCHER" in categories
+            ):
+                launcher = True
+        return Component(
+            kind=kind,
+            name=name,
+            fqn=_resolve_class(name, package) if name else "",
+            line=node.line,
+            exported=node.attrs.get("android:exported"),
+            has_intent_filter=bool(filters),
+            is_launcher=launcher,
+            target_activity=node.attrs.get("android:targetActivity"),
+        )
+
+    def manifest_package(self, manifest: ManifestInfo) -> str | None:
+        """The package components resolve against: Gradle namespace, else the manifest's."""
+        return self.namespace_for(manifest.path) or manifest.package
+
+    # -- dependencies -------------------------------------------------------------------
+
+    @cached_property
+    def build_constants(self) -> dict[str, tuple[str, str, str | None]]:
+        """``Libs.MATERIAL`` -> (group, artifact, version) from ``const val`` declarations in
+        ``buildSrc`` / ``build-logic`` Kotlin files, e.g.
+        ``object Libs { const val MATERIAL = "com.google.android.material:material" }``.
+        Nested objects give dotted names (``Libs.Fragment.TESTING``). Strings with a template
+        (``"$group:artifact"``) or without a ``group:artifact`` shape are not coordinates."""
+        found: dict[str, tuple[str, str, str | None]] = {}
+        for path, source in self.sources.items():
+            if not _BUILD_SOURCE.search(path) or not path.endswith(".kt"):
+                continue
+            masked, raw = source.masked, source.lexed.source
+            objects = [
+                (m.start(), matching_close(masked, m.end() - 1), m.group(1))
+                for m in _OBJECT.finditer(masked)
+            ]
+            for match in _CONST.finditer(raw):
+                if not masked.startswith("const", match.start()):
+                    continue  # inside a comment
+                parts = match.group(2).split(":")
+                if len(parts) < 2 or not parts[0] or not parts[1] or "$" in parts[0] + parts[1]:
+                    continue
+                chain = [
+                    name
+                    for start, end, name in objects
+                    if end is not None and start < match.start() < end
+                ]
+                version = parts[2] if len(parts) > 2 and parts[2] else None
+                found[".".join([*chain, match.group(1)])] = (parts[0], parts[1], version)
+        return found
+
+    # -- target SDK ---------------------------------------------------------------------
+
+    @cached_property
+    def catalog_version_numbers(self) -> dict[str, int]:
+        """``[versions]`` entries of the version catalog that are plain whole numbers, by the
+        accessor Gradle generates for them (``target-sdk`` and ``target_sdk`` both become
+        ``target.sdk``). Empty when the catalog is missing, broken (it then has no versions),
+        ambiguous (more than one ``libs.versions.toml``) or not the only catalog; an accessor two
+        keys share is dropped."""
+        catalog = self.catalog
+        if (
+            catalog is None
+            or self.custom_catalogs
+            or sum(1 for p in self.files.texts if p.endswith("libs.versions.toml")) > 1
+        ):
+            return {}
+        by_accessor: dict[str, list[str]] = defaultdict(list)
+        for key, value in catalog.version_values.items():
+            by_accessor[_accessor(key)].append(value)
+        return {
+            accessor: int(values[0])
+            for accessor, values in by_accessor.items()
+            if len(values) == 1 and values[0].isascii() and values[0].isdigit()
+        }
+
+    @cached_property
+    def build_numeric_constants(self) -> dict[str, int]:
+        """``Versions.TARGET_SDK`` -> 34 from ``const val`` (or ``val`` inside an ``object``)
+        declarations of a whole number in ``buildSrc`` / ``build-logic`` Kotlin files. Nested
+        objects give dotted names; a name declared twice with different values is dropped."""
+        found: dict[str, int] = {}
+        clashing: set[str] = set()
+        for path, source in self.sources.items():
+            if not _BUILD_SOURCE.search(path) or not path.endswith(".kt"):
+                continue
+            masked = source.masked
+            objects = [
+                (m.start(), matching_close(masked, m.end() - 1), m.group(1))
+                for m in _OBJECT.finditer(masked)
+            ]
+            for match in _INT_CONST.finditer(masked):
+                chain = [
+                    name
+                    for start, end, name in objects
+                    if end is not None and start < match.start() < end
+                ]
+                if not match.group("const") and not chain:
+                    continue  # a plain ``val`` outside an object is not a shared constant
+                key = ".".join([*chain, match.group("name")])
+                value = int(match.group("value"))
+                if found.setdefault(key, value) != value:
+                    clashing.add(key)
+        return {k: v for k, v in found.items() if k not in clashing}
+
+    def target_sdk_of(self, script: GradleScript) -> tuple[int, int] | None:
+        """``(targetSdk, line)`` of a build script, or ``None`` if it cannot be known.
+
+        A number written directly is read as before. Otherwise the first ``targetSdk`` whose
+        expression is exactly a catalog version (``libs.versions.targetSdk.get().toInt()``) or a
+        ``buildSrc`` constant (``Versions.TARGET_SDK``) that resolves to a whole number. Anything
+        else (arithmetic, ``rootProject.ext``, a property, a function call, a convention plugin) is
+        unknown: nothing is evaluated and nothing is guessed."""
+        direct = script.target_sdk
+        if direct is not None:
+            return direct
+        for match in _TARGET_SDK_EXPRESSION.finditer(script.masked):
+            value = self._sdk_expression(match.group(1).strip())
+            if value is not None:
+                return value, script.line(match.start())
+        return None
+
+    def _sdk_expression(self, expression: str) -> int | None:
+        for pattern in (_SDK_AS_NUMBER, _SDK_PARSED):
+            found = pattern.fullmatch(expression)
+            if found:
+                return self.catalog_version_numbers.get(found.group(1))
+        return self.build_numeric_constants.get(expression)  # only an exact constant name matches
+
+    @cached_property
+    def dependencies(self) -> list[ResolvedDependency]:
+        resolved: list[ResolvedDependency] = []
+        for script in self.gradle_scripts.values():
+            for dep in script.dependencies:
+                if dep.constant:
+                    coordinate = self.build_constants.get(dep.constant)
+                    resolved.append(
+                        ResolvedDependency(dep, *coordinate)
+                        if coordinate
+                        else ResolvedDependency(dep, None, None, None)
+                    )
+                    continue
+                if dep.alias is None:
+                    resolved.append(ResolvedDependency(dep, dep.group, dep.artifact, dep.version))
+                    continue
+                accessor = dep.alias.removeprefix("libs.")
+                for suffix in (".get", ".asProvider"):
+                    accessor = accessor.removesuffix(suffix)
+                members = (
+                    self.catalog.bundle_members.get(accessor.removeprefix("bundles."))
+                    if self.catalog and accessor.startswith("bundles.")
+                    else None
+                )
+                if members is not None:  # a catalog bundle stands for all of its libraries
+                    for member in members:
+                        known = self.catalog.libraries.get(member) if self.catalog else None
+                        resolved.append(
+                            ResolvedDependency(dep, *known)
+                            if known
+                            else ResolvedDependency(dep, None, None, None, unresolved_alias=True)
+                        )
+                    continue
+                entry = self.catalog.libraries.get(accessor) if self.catalog else None
+                if entry:
+                    resolved.append(ResolvedDependency(dep, entry[0], entry[1], entry[2]))
+                else:
+                    resolved.append(
+                        ResolvedDependency(dep, None, None, None, unresolved_alias=True)
+                    )
+        return resolved
+
+    # -- project dependencies -----------------------------------------------------------------
+
+    @cached_property
+    def _root_settings(self) -> GradleScript | None:
+        return self.gradle_scripts.get("settings.gradle.kts") or self.gradle_scripts.get(
+            "settings.gradle"
+        )
+
+    @cached_property
+    def projects_known(self) -> bool:
+        """The root ``settings`` lists its projects as literals, so a reference to a project that
+        is not in the list is certainly wrong. Otherwise we cannot tell and never claim it."""
+        settings = self._root_settings
+        return bool(settings and settings.includes and not settings.includes_are_dynamic)
+
+    @cached_property
+    def project_dirs(self) -> dict[str, str]:
+        """Every way of naming an included project -> its directory.
+
+        ``":core:data-test"`` and the typesafe accessor ``"projects.core.dataTest"`` both map to
+        ``"core/data-test"``; ``":"`` is the root project.
+        """
+        found = {":": ""}
+        for directory in self._root_settings.includes if self._root_settings else ():
+            found[":" + directory.replace("/", ":")] = directory
+            accessor = ".".join(_camel(part) for part in directory.split("/"))
+            found[f"projects.{accessor}"] = directory
+        return found
+
+    @cached_property
+    def project_dependencies(self) -> list[ProjectDependency]:
+        """``project(":x")`` and ``projects.x`` dependencies of the main build's modules."""
+        separate = [
+            *(self._root_settings.included_builds if self._root_settings else []),
+            "buildSrc",
+        ]
+        found: list[ProjectDependency] = []
+        for path, script in self.gradle_scripts.items():
+            if any(path == b or path.startswith(b + "/") for b in separate):
+                continue  # a separate build with its own settings
+            source = path.rsplit("/", 1)[0] if "/" in path else ""
+            for dep in script.dependencies:
+                reference = dep.project or (
+                    f"projects.{dep.project_accessor}" if dep.project_accessor else None
+                )
+                if reference is None:
+                    continue
+                target = self.project_dirs.get(reference) if self.projects_known else None
+                found.append(
+                    ProjectDependency(source, target, reference, dep.config, path, dep.line)
+                )
+        return found
+
+    @cached_property
+    def module_graph(self) -> dict[str, frozenset[str]]:
+        """Module directory -> directories of the modules it depends on (resolved ones only)."""
+        graph: dict[str, set[str]] = defaultdict(set)
+        for dep in self.project_dependencies:
+            if dep.target is not None:
+                graph[dep.source].add(dep.target)
+        return {source: frozenset(targets) for source, targets in sorted(graph.items())}
+
+    @cached_property
+    def dependency_groups(self) -> frozenset[str]:
+        """Maven groups of the declared dependencies (e.g. ``androidx.test.uiautomator``)."""
+        return frozenset(d.group for d in self.dependencies if d.group)
+
+    @cached_property
+    def has_build_scripts(self) -> bool:
+        return bool(self.gradle_scripts)
+
+    # -- how much of the build we can read ----------------------------------------------------
+    #
+    # A rule may say "X is not declared" only if the build is readable enough that X would have
+    # been seen. These helpers answer that; they return None / False when it is not.
+
+    def module_scripts(self, module: str) -> list[GradleScript]:
+        prefix = f"{module}/" if module else ""
+        return [
+            script
+            for name in ("build.gradle.kts", "build.gradle")
+            if (script := self.gradle_scripts.get(prefix + name)) is not None
+        ]
+
+    def is_application(self, module: str) -> bool:
+        return any(
+            "com.android.application" in script.plugin_ids(self.catalog)
+            for script in self.module_scripts(module)
+        )
+
+    def opaque_plugins(self, script: GradleScript) -> bool:
+        """The script applies a plugin we do not understand (e.g. a convention plugin from
+        ``build-logic``), or one that the catalog cannot resolve. It may add dependencies or
+        enable features that are invisible here."""
+        known = self.catalog.plugins if self.catalog else {}
+        if any(alias not in known for alias, _line in script.plugin_aliases):
+            return True
+        return any(
+            not plugin.startswith(KNOWN_PLUGIN_PREFIXES)
+            for plugin in script.plugin_ids(self.catalog)
+        )
+
+    @cached_property
+    def shared_dependency_scope(self) -> bool:
+        """A script adds dependencies to other modules (``allprojects`` / ``subprojects``)."""
+        return any(
+            ("allprojects" in script.masked or "subprojects" in script.masked)
+            and bool(script.dependencies)
+            for script in self.gradle_scripts.values()
+        )
+
+    def dependency_groups_for(self, module: str | None) -> frozenset[str] | None:
+        """Maven groups declared by ``module`` and the modules it depends on, or ``None`` when
+        that list cannot be trusted to be complete (an unreadable dependency call, an unresolved
+        alias, a convention plugin, an unresolved project reference...)."""
+        if module is None or self.shared_dependency_scope or not self.has_build_scripts:
+            return None
+        memo: dict[str, frozenset[str] | None] = self.__dict__.setdefault("_groups_memo", {})
+        if module not in memo:  # rules ask once per source file; the answer is per module
+            memo[module] = self._dependency_groups(module)
+        return memo[module]
+
+    def dependency_coordinates_for(self, module: str | None) -> frozenset[str] | None:
+        """``group:artifact`` of every library ``module`` and the modules it depends on declare,
+        or ``None`` when that list cannot be trusted to be complete (the same conditions as
+        :meth:`dependency_groups_for`, and additionally a coordinate that is not fully written)."""
+        if module is None or self.shared_dependency_scope or not self.has_build_scripts:
+            return None
+        memo: dict[str, frozenset[str] | None] = self.__dict__.setdefault("_coordinates_memo", {})
+        if module not in memo:
+            memo[module] = self._dependency_coordinates(module)
+        return memo[module]
+
+    def _dependency_coordinates(self, module: str) -> frozenset[str] | None:
+        closure = self._dependency_closure(module)
+        if closure is None:
+            return None
+        found: set[str] = set()
+        for resolved in closure:
+            group, artifact = resolved.group, resolved.artifact
+            if group is None or artifact is None or "$" in group or "$" in artifact:
+                return None
+            found.add(f"{group}:{artifact}")
+        return frozenset(found)
+
+    def _dependency_groups(self, module: str) -> frozenset[str] | None:
+        closure = self._dependency_closure(module)
+        if closure is None:
+            return None
+        groups: set[str] = set()
+        for resolved in closure:
+            if resolved.group is None or "$" in resolved.group:
+                return None
+            groups.add(resolved.group)
+        return frozenset(groups)
+
+    def _dependency_closure(self, module: str) -> list[ResolvedDependency] | None:
+        """The declared libraries of ``module`` and of the modules it depends on, or ``None`` when
+        the build is not readable enough to say (no script, an unparsed dependency call, a
+        convention plugin, a project reference that points nowhere)."""
+        pending, seen, found = [module], set(), []
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            scripts = self.module_scripts(current)
+            if not scripts:
+                return None
+            if any(s.unparsed_dependency_calls or self.opaque_plugins(s) for s in scripts):
+                return None
+            paths = {s.path for s in scripts}
+            for resolved in self.dependencies:
+                dep = resolved.dep
+                if dep.path not in paths or dep.project or dep.project_accessor:
+                    continue
+                found.append(resolved)
+            if any(d.source == current and d.target is None for d in self.project_dependencies):
+                return None
+            pending.extend(self.module_graph.get(current, ()))
+        return found
+
+    @cached_property
+    def kotlin_version(self) -> tuple[int, ...] | None:
+        """The Kotlin Gradle plugin's version when it is written as a literal, else ``None``."""
+        found: dict[str, str] = {}
+        for script in self.gradle_scripts.values():
+            for plugin, version in script.plugin_versions.items():
+                found.setdefault(plugin, version)
+        if self.catalog:
+            for alias, plugin in self.catalog.plugins.items():
+                version = self.catalog.plugin_versions.get(alias)
+                if plugin and version:
+                    found.setdefault(plugin, version)
+        for plugin in (
+            "org.jetbrains.kotlin.android",
+            "org.jetbrains.kotlin.jvm",
+            "org.jetbrains.kotlin.multiplatform",
+        ):
+            if plugin in found:
+                return parse_version(found[plugin])
+        return None
+
+    def is_test_source(self, path: str) -> bool:
+        return self.source_set(path).startswith(TEST_SOURCE_SETS)
+
+    @cached_property
+    def navigation(self):
+        """Compose routes, XML navigation graphs and deep links (see ``navigation.py``)."""
+        from .navigation import NavigationFacts  # imported lazily: it needs this module
+
+        return NavigationFacts.build(self)
+
+    @cached_property
+    def security(self):
+        """PendingIntent, receiver-registration, URL and permission call sites (see
+        ``securityfacts.py``)."""
+        from .securityfacts import SecurityFacts  # imported lazily: it needs this module
+
+        return SecurityFacts.build(self)
+
+    @cached_property
+    def auth(self):
+        """Hardcoded secrets, signing passwords, preference writes and OAuth redirect URIs (see
+        ``authfacts.py``)."""
+        from .authfacts import AuthFacts  # imported lazily: it needs this module
+
+        return AuthFacts.build(self)
+
+    @cached_property
+    def component_classes(self) -> dict[str, tuple[str, str, int]]:
+        """Concrete Activity / Service / BroadcastReceiver classes of the app's own sources:
+        ``fqn -> (kind, path, line)``. A class counts if it extends a framework base (see
+        ``COMPONENT_BASES``) directly or through other project classes."""
+        by_simple: dict[str, list[TypeDecl]] = defaultdict(list)
+        located: dict[str, str] = {}
+        for path, source in self.sources.items():
+            if _BUILD_SOURCE.search(path):
+                continue
+            for decl in source.types:
+                by_simple[decl.name].append(decl)
+                located[decl.fqn] = path
+        memo: dict[str, str | None] = {}
+
+        def kind_of(decl: TypeDecl, depth: int = 0) -> str | None:
+            if decl.fqn in memo:
+                return memo[decl.fqn]
+            memo[decl.fqn] = None  # also breaks inheritance cycles
+            result = None
+            if depth < 20:
+                for supertype in decl.supertypes:
+                    name = supertype.rsplit(".", 1)[-1]
+                    for kind, bases in COMPONENT_BASES.items():
+                        if name in bases:
+                            result = kind
+                    candidates = by_simple.get(name, [])
+                    if result is None and len(candidates) == 1:
+                        result = kind_of(candidates[0], depth + 1)
+                    if result:
+                        break
+            memo[decl.fqn] = result
+            return result
+
+        found: dict[str, tuple[str, str, int]] = {}
+        for decls in by_simple.values():
+            for decl in decls:
+                kind = kind_of(decl)
+                if kind and not decl.abstract and not decl.private and decl.kind == "class":
+                    found[decl.fqn] = (kind, located[decl.fqn], decl.line)
+        return found
