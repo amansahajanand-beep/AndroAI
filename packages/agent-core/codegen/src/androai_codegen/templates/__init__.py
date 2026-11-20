@@ -2,14 +2,17 @@
 
 Phase 5.1 ships one template: Kotlin + Jetpack Compose. Phase 5.2 adds ``ProjectSpec``: a
 structured, validated description of several screens and the navigation between them, rendered
-into the same project (``render_patch(config, spec=...)``). Rendering is pure and deterministic and
-never touches a workspace; ``PatchEngine`` applies the result. The toolchain versions in
-``versions.py`` were built (debug and release APK, AAB, lint, ``build``); ``VERIFIED_BUILD`` says
-exactly what that covers, and what it does not (no signing, no tests, one configuration).
+into the same project (``render_patch(config, spec=...)``). Phase 5.3 adds, to a project with a
+spec, a generated JVM navigation test (Robolectric + Compose test) and its test-only dependencies.
+Rendering is pure and deterministic and never touches a workspace; ``PatchEngine`` applies the
+result. The toolchain versions in ``versions.py`` were built (debug and release APK, AAB, lint,
+``build``, and for spec projects the navigation tests); ``VERIFIED_BUILD`` says exactly what that
+covers, and what it does not (no signing, no instrumented test, a few configurations).
 """
 
 from .config import Language, ProjectConfig, UiToolkit
 from .errors import TemplateError, TemplateRenderError, UnsupportedTemplateError
+from .navtests import navigation_tests_supported
 from .render import RenderedFile, TemplateFile
 from .renderer import (
     Template,
@@ -49,6 +52,7 @@ __all__ = [
     "UnsupportedTemplateError",
     "available_templates",
     "get_template",
+    "navigation_tests_supported",
     "placeholder_values",
     "render_files",
     "render_patch",

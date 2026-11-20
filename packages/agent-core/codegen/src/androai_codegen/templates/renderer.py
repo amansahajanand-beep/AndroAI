@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from ..editing.models import CreateFile, PatchSet
-from . import kotlin_compose, screens
+from . import kotlin_compose, navtests, screens
 from .config import Language, ProjectConfig, UiToolkit
 from .errors import TemplateRenderError, UnsupportedTemplateError
 from .render import (
@@ -47,6 +47,13 @@ class Template:
     apply_spec: SpecRenderer | None = None
 
 
+def _kotlin_compose_spec(
+    files: tuple[RenderedFile, ...], config: ProjectConfig, spec: ProjectSpec
+) -> tuple[RenderedFile, ...]:
+    """The screens of a spec (Phase 5.2), then the navigation tests that check them (Phase 5.3)."""
+    return navtests.add_navigation_tests(screens.apply_spec(files, config, spec), config, spec)
+
+
 # Adding Java or XML-layout templates later is a new module that defines a ``Template`` plus one
 # entry here; nothing in the renderer, the config or the validators changes. A combination that is
 # not registered raises ``UnsupportedTemplateError`` (see ``get_template``).
@@ -56,7 +63,7 @@ _REGISTRY: dict[tuple[Language, UiToolkit], Template] = {
         UiToolkit.COMPOSE,
         "Single-module Kotlin app with Jetpack Compose, Material 3 and Navigation Compose",
         kotlin_compose.FILES,
-        apply_spec=screens.apply_spec,
+        apply_spec=_kotlin_compose_spec,
     ),
 }
 
