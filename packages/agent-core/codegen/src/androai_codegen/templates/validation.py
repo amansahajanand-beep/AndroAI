@@ -99,27 +99,34 @@ def _name_char_allowed(ch: str) -> bool:
     return ch in _NAME_PUNCTUATION or unicodedata.category(ch)[0] in "LNM"
 
 
-def validate_project_name(value: object) -> str:
-    """A display name: letters, digits, single spaces and a few harmless symbols, NFC-normalised."""
+def validate_display_text(value: object, what: str, max_length: int) -> str:
+    """Text shown to the user (``what`` names it in errors): letters, digits, single spaces and a
+    few harmless symbols, NFC-normalised. It ends up in a string resource, so nothing with a
+    meaning in XML, Kotlin, Gradle or Android resources is accepted."""
     if not isinstance(value, str):
-        raise ValueError("project name must be a string")
+        raise ValueError(f"{what} must be a string")
     value = unicodedata.normalize("NFC", value)
     if not value:
-        raise ValueError("project name is empty")
+        raise ValueError(f"{what} is empty")
     if value != value.strip():
-        raise ValueError("project name must not start or end with a space")
-    if len(value) > MAX_PROJECT_NAME_LENGTH:
-        raise ValueError(f"project name is longer than {MAX_PROJECT_NAME_LENGTH} characters")
+        raise ValueError(f"{what} must not start or end with a space")
+    if len(value) > max_length:
+        raise ValueError(f"{what} is longer than {max_length} characters")
     bad = sorted({ch for ch in value if not _name_char_allowed(ch)})
     if bad:
-        raise ValueError(f"project name contains characters that are not allowed: {bad!r}")
+        raise ValueError(f"{what} contains characters that are not allowed: {bad!r}")
     if unicodedata.category(value[0])[0] not in "LN":
-        raise ValueError("project name must start with a letter or digit")
+        raise ValueError(f"{what} must start with a letter or digit")
     if "  " in value:
         # Android collapses runs of whitespace in a string resource, so the app would not be
         # shown under the name that was asked for.
-        raise ValueError("project name must not contain consecutive spaces")
+        raise ValueError(f"{what} must not contain consecutive spaces")
     return value
+
+
+def validate_project_name(value: object) -> str:
+    """A display name: letters, digits, single spaces and a few harmless symbols, NFC-normalised."""
+    return validate_display_text(value, "project name", MAX_PROJECT_NAME_LENGTH)
 
 
 def validate_version_name(value: object) -> str:

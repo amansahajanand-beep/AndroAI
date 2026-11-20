@@ -7,27 +7,44 @@ applying it (with protection, journal, checkpoint and rollback) is the job of ``
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-from ..editing.errors import PathValidationError
 from ..editing.models import CreateFile, PatchSet
-from ..editing.paths import normalize_relative_path
-from . import kotlin_compose
+from . import kotlin_compose, screens
 from .config import Language, ProjectConfig, UiToolkit
 from .errors import TemplateRenderError, UnsupportedTemplateError
-from .render import RenderedFile, TemplateFile, android_string, placeholders, substitute
+from .render import (
+    RenderedFile,
+    TemplateFile,
+    android_string,
+    check_content,
+    check_rendered_path,
+    placeholders,
+    substitute,
+)
+from .spec import ProjectSpec
 from .versions import TOOLCHAIN
+
+# Turns the rendered files of a template into those of a project with the screens of a spec.
+SpecRenderer = Callable[
+    [tuple[RenderedFile, ...], ProjectConfig, ProjectSpec], tuple[RenderedFile, ...]
+]
 
 
 @dataclass(frozen=True)
 class Template:
-    """A project template: the files for one language / UI toolkit combination."""
+    """A project template: the files for one language / UI toolkit combination.
+
+    ``apply_spec`` is how a template supports a ``ProjectSpec`` (several screens); a template
+    without one refuses a spec with ``UnsupportedTemplateError``.
+    """
 
     language: Language
     ui_toolkit: UiToolkit
     description: str
     files: tuple[TemplateFile, ...]
+    apply_spec: SpecRenderer | None = None
 
 
 # Adding Java or XML-layout templates later is a new module that defines a ``Template`` plus one
@@ -39,6 +56,7 @@ _REGISTRY: dict[tuple[Language, UiToolkit], Template] = {
         UiToolkit.COMPOSE,
         "Single-module Kotlin app with Jetpack Compose, Material 3 and Navigation Compose",
         kotlin_compose.FILES,
+        apply_spec=screens.apply_spec,
     ),
 }
 
@@ -104,27 +122,33 @@ def render_template(template: Template, values: Mapping[str, str]) -> tuple[Rend
     rendered: dict[str, RenderedFile] = {}
     for file in template.files:
         path = substitute(file.path, values, where=f"path {file.path!r}")
-        try:
-            canonical = normalize_relative_path(path)
-        except PathValidationError as exc:
-            raise TemplateRenderError(f"{file.path!r} rendered to an unsafe path: {exc}") from exc
-        if canonical != path:
-            raise TemplateRenderError(f"{file.path!r} rendered to a non-canonical path {path!r}")
+        check_rendered_path(file.path, path)
         if path in rendered:
             raise TemplateRenderError(f"two template files render to the same path {path!r}")
         content = substitute(file.content, values, where=path)
-        if "\x00" in content or "\r" in content:
-            raise TemplateRenderError(f"{path}: content has a NUL or a carriage return")
-        if not content.endswith("\n"):
-            raise TemplateRenderError(f"{path}: content must end with a newline")
+        check_content(path, content)
         rendered[path] = RenderedFile(path, content, file.description)
     return tuple(rendered[path] for path in sorted(rendered))
 
 
-def render_files(config: ProjectConfig) -> tuple[RenderedFile, ...]:
-    """The files of the project, sorted by path. Deterministic: same config, same bytes."""
+def render_files(
+    config: ProjectConfig, spec: ProjectSpec | None = None
+) -> tuple[RenderedFile, ...]:
+    """The files of the project, sorted by path. Deterministic: same input, same bytes.
+
+    Without a ``spec`` this is exactly the Phase 5.1 project. With one, the screens and the
+    navigation of the spec replace the sample screen (see ``screens.py``).
+    """
     template = get_template(config.language, config.ui_toolkit)
-    return render_template(template, placeholder_values(config))
+    files = render_template(template, placeholder_values(config))
+    if spec is None:
+        return files
+    if template.apply_spec is None:
+        raise UnsupportedTemplateError(
+            f"the {template.language}+{template.ui_toolkit} template does not support "
+            "a project spec"
+        )
+    return template.apply_spec(files, config, spec)
 
 
 def render_patch(
@@ -134,9 +158,10 @@ def render_patch(
     run_id: str,
     task_id: str,
     description: str | None = None,
+    spec: ProjectSpec | None = None,
 ) -> PatchSet:
     """The project as a ``PatchSet`` that creates every file (it fails on a non-empty target)."""
-    files = render_files(config)
+    files = render_files(config, spec)
     return PatchSet(
         project_id=project_id,
         run_id=run_id,

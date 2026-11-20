@@ -9,7 +9,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
 | 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c done** (authentication: 8 new rule ids, 65 tests, 94 of 94 mutations caught; nothing reported on the five real projects unfaulted, 25 of 33 authentication faults injected into them caught, the other 8 silent because the build is not readable enough). **Target SDK resolution done** (a follow-up: `targetSdk` is now also read from a version-catalog entry or a `buildSrc` constant, so the rules that depend on it engage on `iosched` and `sunflower`; 121 tests, 27 of 27 mutations caught, no new finding on the five real projects, 101 of 121 injected faults caught, up from 96). **4b-3 (API use, null safety) not started**. |
-| 5 | New project generation | **In progress. 5.1 done (three local commits on `p3/phase5-templates`, not pushed): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Build-verified for the default template configuration only** (Docker, 2026-11-20, AGP 9.5.1, Gradle 9.6.0, Kotlin 2.4.21, Compose BOM 2026.11.01, compileSdk 37.1): debug APK, release APK and AAB (both **unsigned**), `build`, `lint` (0 errors, 4 warnings, left as known limitations) and `tasks --all` pass. **No application unit tests exist yet** (`test` passes with nothing to run). No emulator or device run, no signing, no other configuration, no Gradle wrapper. Prompt-driven generation, planning and the worker are not started |
+| 5 | New project generation | **In progress. 5.1 done (branch `p3/phase5-templates`, draft PR): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Build-verified for the default template configuration only** (Docker, 2026-11-20, AGP 9.5.1, Gradle 9.6.0, Kotlin 2.4.21, Compose BOM 2026.11.01, compileSdk 37.1): debug APK, release APK and AAB (both **unsigned**), `build`, `lint` (0 errors, 4 warnings, left as known limitations) and `tasks --all` pass. **No application unit tests exist yet** (`test` passes with nothing to run). No emulator or device run, no signing, no other configuration, no Gradle wrapper. **5.2 done (local branch `p3/phase5-screens`, not pushed): multi-screen projects from a structured `ProjectSpec`** (deterministic, no LLM), build-verified on four sample specs with the same Gradle commands (see "Phase 5.2"): no application unit tests, no signing, no emulator run. Prompt-driven generation, planning and the worker are not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
 | 8 | Visual editor source mapping | Not started |
@@ -551,9 +551,90 @@ Person 4):
 4. Add the same kinds of tests (structure, package declarations, review compatibility) and the faults-are-caught
    sentinels of `tests/test_templates_patch.py`.
 
+## Multi-screen projects from a `ProjectSpec` (Phase 5.2)
+
+Phase 5.1 renders one project with one sample screen. Phase 5.2 adds an **internal, deterministic spec-to-project layer**:
+a validated `ProjectSpec` (which screens exist, what each shows, which screen opens which) is rendered into the same
+Kotlin + Compose project, as one `PatchSet`. No LLM, planner, Celery worker, storage or repair loop is involved, and no
+contract, compatibility matrix, worker or Docker file was touched. A later adapter (Person 3, once Person 2's
+`ImplementationPlan` shape and the v0.2 contract are agreed) maps a plan onto a `ProjectSpec`; none of that exists yet.
+
+| Module | Role |
+|---|---|
+| `spec.py` | `ScreenSpec` and `ProjectSpec` (frozen pydantic models, unknown fields refused), name and route derivation, graph validation |
+| `screens.py` | `apply_spec`: turns the rendered Phase 5.1 files into the project of a spec (Kotlin, `Routes`, navigation host, strings) |
+| `renderer.py` | `render_files(config, spec=None)` and `render_patch(config, ..., spec=None)`; `Template.apply_spec` is how a template supports a spec (one without it refuses with `UnsupportedTemplateError`) |
+| `render.py`, `validation.py` | `checked_file` (generated files get the same path and content rules as template files) and `validate_display_text` (shared by project names and screen texts) |
+
+### Inputs
+
+| Field | Rule |
+|---|---|
+| `ScreenSpec.name` | PascalCase ASCII (`[A-Z][A-Za-z0-9]*`), at most 30 characters, not ending in `Screen`, unique ignoring case. Everything in the code derives from it: the composable `<Name>Screen`, the file `ui/screens/<Name>Screen.kt`, the route (snake case, `SettingsDetail` is `settings_detail`) and the constant (`SETTINGS_DETAIL`). Names that are keywords in lower case (`Class`, `Object`, `Fun`) are fine, as nothing lower-cased becomes an identifier |
+| `ScreenSpec.title` | Display text (the rules of a project name), at most 40 characters; shown as a headline and on the buttons that open the screen |
+| `ScreenSpec.description` | Optional display text, at most 120 characters, shown under the title |
+| `ScreenSpec.navigates_to` | Up to 8 screen names: each must exist, none is the screen itself, none is repeated; one button each |
+| `ProjectSpec.screens` | 1 to 12 screens |
+| `ProjectSpec.start` | A screen name; defaults to the first screen. **Every screen must be reachable from it** (an island is refused, listed by name) |
+
+Titles and descriptions only ever reach `strings.xml`, escaped. A string is written only if something uses it (no unused
+resource for lint): `screen_<route>_title`, `screen_<route>_body` when there is a description, and `action_back` when
+some screen is not the start.
+
+### What changes compared with Phase 5.1
+
+With a spec, the sample `ui/home/HomeScreen.kt` is removed, `navigation/AppNavHost.kt` and `res/values/strings.xml` are
+replaced, and one `ui/screens/<Name>Screen.kt` is added per screen: 18 + N files. **Every other file is byte-identical**
+(Gradle files, catalog, wrapper properties, manifest, theme, `MainActivity`). Without a spec the output is exactly the
+Phase 5.1 project: a test pins the SHA-256 of three configs, taken from the 5.1 renderer before 5.2 touched it. The two
+shared helpers extracted from `render_template` (`check_rendered_path`, `check_content`) keep its messages.
+
+### Navigation
+
+- Routes are `const val` strings in `object Routes`, and every `navigate` call, `composable(...)` and the start destination
+  names one of those constants. No route is computed and nothing is a string template, so the static navigation rules
+  (4b-2a) engage: tests assert the review finds every declared route, the start destination and every `navigate` target,
+  with `dynamic = False`, and the generated projects have no finding.
+- Each screen takes a callback per button (`onOpen<Target>`) and, unless it is the start, `onBack`; `AppNavHost` wires them
+  (`navController.navigate(Routes.X)`, `navController.popBackStack()`). A screen with nothing to wire keeps the simple
+  `fun XScreen(modifier: Modifier = Modifier)` signature. Each screen has a `@Preview` in the app's theme.
+- Plain `Scaffold`, `Column` and `Button`s are used: no `TopAppBar` (chosen to avoid a possible experimental-API opt-in;
+  not checked against material3 1.5.0), and no new dependency.
+
+### Usage
+
+```python
+from androai_codegen.templates import ProjectConfig, ProjectSpec, ScreenSpec, render_patch
+
+config = ProjectConfig(project_name="Notes App", package_name="com.example.notes")
+spec = ProjectSpec(screens=(
+    ScreenSpec(name="Home", title="Home", navigates_to=("Settings", "About")),
+    ScreenSpec(name="Settings", title="Settings", navigates_to=("About",)),
+    ScreenSpec(name="About", title="About"),
+))
+patch = render_patch(config, project_id="p1", run_id="r1", task_id="t1", spec=spec)   # one PatchSet of CreateFile
+# review_patch(engine, patch), then engine.apply(patch) or CheckpointManager.apply(patch), as for any patch
+```
+
+### Limitations
+
+- **The screens are static**: a title, an optional description and buttons. No input, state, ViewModel, list, image,
+  route argument, deep link, bottom bar or drawer. Navigation is forward buttons plus Back.
+- Routes are derived from names and cannot be chosen. At most 12 screens and 8 buttons per screen. English "Back" only.
+- Only the Kotlin + Compose template supports a spec; Java or XML combinations still refuse.
+- **Never run**: the generated apps were built, not launched. Runtime navigation behaviour (back stack, button wiring on a
+  device) and the Compose previews are untested.
+- No application unit tests are generated (as in 5.1); the release APK and AAB are unsigned.
+- The static review is silent when a route is computed, so a `Routes` constant that is removed by hand would make the
+  route "computed" and unreported; the compiler (the Gradle build) is what catches that, and the sentinel tests use literal
+  routes for the same reason.
+- `ProjectSpec` is not yet produced from anything: mapping a planner's output onto it, and `AndroidTarget` onto
+  `ProjectConfig`, is future adapter work that depends on other owners.
+
 ## Generation workflow, supported technologies, repair rules
 
-**Mostly not implemented yet** (Phases 5.2 and later, 6-8). Phase 5.1 added the project templates above. Planned per the
+**Mostly not implemented yet** (Phase 5.3 and later, 6-8). Phases 5.1 and 5.2 added the project templates and the
+deterministic spec-to-project layer above; nothing generates code from a prompt yet. Planned per the
 Role 3 spec: Kotlin first with Jetpack Compose, then Java and XML layouts, and a repair loop bounded by iteration, time,
 cost, repeated-error and no-progress limits, returning infrastructure and provider failures to orchestration without
 touching source. The patch engine is language-agnostic: it edits UTF-8 text files and knows nothing about Kotlin or
@@ -1104,6 +1185,60 @@ comparison of unmodified projects); the contracts, worker and CI suites (nothing
 gained one `E501` per-file ignore for `templates/kotlin_compose.py`, because a TOML inline table of the version catalog
 cannot be wrapped.
 
+### Phase 5.2 verification (multi-screen projects; `p3/phase5-screens`, based on `p3/phase5-templates` at `f008772`)
+
+| Check | Result |
+|---|---|
+| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen` | 1689 passed, 5 skipped, 1 xfailed (the 1503 / 5 / 1 of `f008772` plus 186 new tests) |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4), same suite from a fresh export of the working tree | 1693 passed, 1 skipped, 1 xfailed |
+| `ruff check`, `ruff format --check`, `compileall` | clean on both platforms |
+| New tests | 186: `ProjectSpec` and `ScreenSpec` 102, generation and integration 83, plus 1 for the error messages of the package and application-ID validation |
+| Phase 5.1 preserved | the 5.1 test files pass unchanged, and without a spec the output hashes (SHA-256) of three configs equal the values taken from the 5.1 renderer before 5.2 changed it |
+| Mutation testing of the new code | 64 of 64 caught. The first run caught 61: one survivor was a redundant validator (removed), one an unasserted message of the new code, one an unasserted message in 5.1's package and application-ID validation (a small gap in the 5.1 tests, now covered) |
+| Static review of the generated projects | no finding for 5 specs (1, 3, 4 keyword-named, 12 screens, a cycle with a chosen start) x 3 configs (default, other package and application ID, special project name); eight deliberate breakages are each caught by the right rule (`navigation.destination_missing`, `navigation.start_destination_missing`, `navigation.duplicate_destination`, `import.missing`, `import.unresolved_project`, `resource.unresolved`, `syntax.unbalanced_brackets`) |
+| **Gradle builds of four sample projects** | **all 28 commands exit 0** (below) |
+
+**Gradle builds (Docker, 2026-11-20, the image and volumes of 5.1's validation).** JDK 17 (Temurin 17.0.21), system Gradle
+9.6.0, AGP 9.5.1, Kotlin 2.4.21, Compose BOM 2026.11.01, SDK platform 37.1, build-tools 36.0.0. Each sample was rendered
+through `PatchEngine` (after `review_patch`, which found nothing) into an empty workspace, copied into the container and
+built with `G` = `gradle --no-daemon --console=plain --stacktrace --warning-mode all`. The final tree renders exactly the
+files that were built (byte-identical, checked).
+
+| Sample | Spec and config | Files | `G build` (cold) |
+|---|---|---|---|
+| `one` | 1 screen (`Home`), default config | 19 | 105 tasks, 1m38s |
+| `three` | `Home` opens `Settings` and `About`, `Settings` opens `About`; titles with `&` and `'` | 21 | 105 tasks, 1m09s |
+| `keywords` | `Class`, `Object`, `Fun`, `Val` (keywords in lower case), 4 screens | 22 | 105 tasks, 1m23s |
+| `twelve-full` | 12 screens, the maximum of 8 buttons on the first; package `org.acme.deep.pkg`, application ID `com.acme.NotesPro`, name `R&D Tracker`, versionCode 3, `2.1` | 30 | 105 tasks, 1m19s |
+
+For every sample, each of these exited 0: `G build` (cold), `G tasks --all`, `G assembleRelease`, `G bundleRelease`, `G lint`,
+`G :app:lintRelease` and `G test`. Lint: **0 errors and the same four warnings as Phase 5.1 on every sample**
+(`OldTargetApi`, `AndroidGradlePluginVersion`, `DataExtractionRules`, `MissingApplicationIcon`): the generated strings produce
+no unused-resource or other new warning. `test` runs `testDebugUnitTest` and `testReleaseUnitTest` with `NO-SOURCE`: there are
+no unit tests. The only warning in any log is "Unable to strip ... libandroidx.graphics.path.so" (no NDK in the image).
+
+| Sample | Release APK (unsigned) | Release AAB (unsigned) | Debug APK |
+|---|---|---|---|
+| `one` | 9,340,694 B, `e0fd0c06088fdbd41127a252292c0fe5bb0f0680342463188b11d36fafdc39a9` | 8,959,516 B, `2fe746636249fefe2da119dd8ec65d5d8279a0fe6e4654ceb69c5fffc45feac4` | 13,314,135 B |
+| `three` | 9,342,734 B, `ef9bcb1ccf79ef2bdc28f83dc99eecd543fb64d76d5d41aa179fec1cbf091d29` | 8,967,701 B, `70949f5c477ccbd6d8f3fcbef8aa330dbdf0656a76a0581a62912039b89efb30` | 13,332,559 B |
+| `keywords` | 9,358,670 B, `a3ba09ba01ea70317de9a69b5a1941ca98ff351630a9e1da5a4dda53c6bc0271` | 8,969,642 B, `21a9d2dd1f12b53ae37757ac84a0d79b1445abfe52a0ceed557e5856e65df28c` | 13,332,115 B |
+| `twelve-full` | 9,378,298 B, `b4bcf928ddd19b248f965bb0c74e8d8533aba3b29472b8adc23aaa1ab606e29d` | 8,992,540 B, `d05c171ed3be7363395cbb6f935ba745a597c63addef8313efcfdab9ea5edc76` | 13,368,127 B |
+
+All four: minSdk 24, targetSdk 36, compileSdk 37, launchable `MainActivity`, release APK not debuggable (debug APK
+debuggable), zipalign check OK, release APK and AAB **unsigned** (`apksigner` DOES NOT VERIFY, `jarsigner` finds no manifest).
+`twelve-full` shows the namespace and application ID apart: package `com.acme.NotesPro`, versionCode 3, versionName `2.1`,
+label `R&D Tracker`, launcher `org.acme.deep.pkg.MainActivity`. **Not verified**: any run on an emulator or device
+(navigation at runtime, the previews), signing, other SDK levels, the Gradle wrapper, any unit test (none exists).
+
+What the 5.2 tests cover: valid and invalid screen names (case, digits, non-ASCII, separators, length, the `Screen` suffix),
+route and constant derivation, titles and descriptions (injection characters, bidi, double spaces, length, NFC), edges (unknown,
+self, duplicate, too many), start screens, the 12-screen limit, unreachable screens, cycles, immutability and JSON round trips;
+the exact file set and the byte-identity of every file that should not change; package declarations, imports used, sorted and
+unique; button and `onBack` wiring; `Routes` as `const val`; every `navigate` target declared; the start destination; the
+review's own navigation facts; strings (what is used is defined and nothing else, escaped, parse-back); determinism; the patch
+limits; refusal of a template without spec support, of a missing base file and of a screen overwriting a file; `PatchSet`
+preview, byte-for-byte apply, rollback, refusal over an existing project, checkpoint and `review_patch`.
+
 ### Platform coverage (Windows and Linux together)
 
 Some tests can only run on one operating system, so each platform skips some. Together they cover all 415 tests:
@@ -1354,16 +1489,26 @@ level, no Gradle wrapper); there is one template (Kotlin + Compose, one module);
 generated; and two kinds of breakage in a generated project are not caught by the review (they are covered by the
 template tests instead).
 
+Phase 5.2 (multi-screen projects): see "Multi-screen projects from a `ProjectSpec`" above. In short: the screens are
+static (title, description, buttons; no state, input or arguments), at most 12 screens and 8 buttons each, routes are
+derived and not chosen, and only the Kotlin + Compose template supports a spec. Four sample specs built with the same
+Gradle commands as 5.1, but **no generated app was ever run** (no emulator or device), so runtime navigation and the
+previews are untested; the outputs are unsigned and there are no unit tests. The static review cannot see a removed
+`Routes` constant (the route becomes "computed"); the Gradle build catches that. Nothing consumes a `ProjectSpec` yet.
+
 ## Unfinished integration work
 
 Not done:
 
 - **Phase 4b-3** (API-use and null-safety rules).
-- **More builds of the Phase 5.1 template.** Debug, release, bundle, `lint` and `tasks --all` of the default project
-  were run (in a temporary Docker image kept outside the repository). Still to do: signing the release outputs, an
-  emulator or device run, other package names and SDK levels, a build with the Gradle wrapper, and application unit
-  tests once generated code has logic to test. That belongs in the `android-build` image, which needs a JDK and the
+- **More builds of the Phase 5.1 and 5.2 templates.** Debug, release, bundle, `lint` and `tasks --all` of the default
+  project (5.1) and of four sample specs (5.2) were run (in a temporary Docker image kept outside the repository). Still to
+  do: signing the release outputs, an emulator or device run (the only way to test runtime navigation and the previews),
+  other SDK levels, a build with the Gradle wrapper, and application unit tests once generated code has logic to test. That belongs in the `android-build` image, which needs a JDK and the
   Android SDK (platform 37.1, build-tools 36.0.0, ideally the NDK): Person 4's environment.
+- **Producing a `ProjectSpec`.** Nothing builds one yet. Mapping a planner's output (`ImplementationPlan`, whose shape is
+  Person 2's) onto it, and the contracts' `AndroidTarget` onto `ProjectConfig`, is adapter work that waits for the v0.2
+  contract proposal to be reviewed and for the LLM provider decision.
 - **More real-project validation** (see Phase 4 limitations): five projects have been reviewed in total, and the
   older rules still showed false positives on two of the newer ones; more are needed before any finding is
   allowed to block a patch in production.
