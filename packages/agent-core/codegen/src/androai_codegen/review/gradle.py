@@ -27,7 +27,11 @@ _NUMBER = r"[ \t]*=?[ \t]*(\d+)"
 _COMPILE_SDK = re.compile(rf"\bcompileSdk(?:Version)?\b{_NUMBER}")
 _MIN_SDK = re.compile(rf"\bminSdk(?:Version)?\b{_NUMBER}")
 _TARGET_SDK = re.compile(rf"\btargetSdk(?:Version)?\b{_NUMBER}")
-_RELEASE_SDK = re.compile(r"\bcompileSdk\b[^\n]*?\brelease\((\d+)")
+_RELEASE_SDK = re.compile(r"\bcompileSdk\b[^\n]*?\brelease\((\d+)\s*\)")
+# AGP 9: ``compileSdk { version = release(37) { minorApiLevel = 1 } }``, usually over several lines.
+_COMPILE_SDK_BLOCK = re.compile(r"\bcompileSdk\b[ \t]*\{")
+_RELEASE_CALL = re.compile(r"\brelease\s*\(\s*(\d+)\s*\)")  # a literal: not ``release(36 + 1)``
+_MINOR_API_LEVEL = re.compile(r"\bminorApiLevel\b[ \t]*=?[ \t]*(\d+)")
 _NAMESPACE = re.compile(r"\bnamespace\b[ \t]*=?[ \t]*")
 _APPLICATION_ID = re.compile(r"\bapplicationId\b[ \t]*=?[ \t]*")
 _PLUGIN_ID = re.compile(r"(?<![\w.])id[ \t]*\(?[ \t]*")
@@ -51,6 +55,11 @@ _KOTLIN_DEP = re.compile(r"(?<![\w.])kotlin[ \t]*\([ \t]*")
 _IGNORED_DEP = re.compile(r"(?:gradleApi|localGroovy|gradleKotlinDsl)[ \t]*\(")
 _COMPOSE_ON = re.compile(r"(?<![\w.])compose[ \t]*(?:=[ \t]*)?true\b")
 _VERSION_AFTER = re.compile(r"[ \t]*\)?[ \t]*version[ \t]*\(?[ \t]*")
+
+
+def sdk_label(api: int, minor: int | None) -> str:
+    """``37`` for API 37, ``37.1`` for API 37 minor level 1."""
+    return f"{api}.{minor}" if minor else str(api)
 
 
 @dataclass(frozen=True)
@@ -404,9 +413,64 @@ class GradleScript:
         match = pattern.search(self.masked)
         return (int(match.group(1)), self.line(match.start())) if match else None
 
+    def _block_end(self, brace: int) -> int | None:
+        """Offset of the ``}`` closing the ``{`` at ``brace`` (strings and comments are masked)."""
+        depth = 0
+        for index in range(brace, len(self.masked)):
+            char = self.masked[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return index
+        return None
+
+    @cached_property
+    def _compile_sdk_release(self) -> tuple[int, int, int] | None:
+        """``(api level, minor level, line)`` of ``compileSdk { version = release(N) { ... } }``.
+
+        The block may span several lines. ``minorApiLevel`` defaults to 0 when it is not written.
+        ``preview(...)``, a property or any other expression is not read.
+        """
+        for block in _COMPILE_SDK_BLOCK.finditer(self.masked):
+            end = self._block_end(block.end() - 1)
+            if end is None:
+                continue
+            body = self.masked[block.end() : end]
+            release = _RELEASE_CALL.search(body)
+            if release:
+                minor = _MINOR_API_LEVEL.search(body, release.end())
+                return (
+                    int(release.group(1)),
+                    int(minor.group(1)) if minor else 0,
+                    self.line(block.end() + release.start()),
+                )
+        return None
+
     @cached_property
     def compile_sdk(self) -> tuple[int, int] | None:
-        return self._number(_COMPILE_SDK) or self._number(_RELEASE_SDK)
+        """``(api level, line)``: a number written out, or ``release(N)`` in a ``compileSdk {}``."""
+        plain = self._number(_COMPILE_SDK)
+        if plain:
+            return plain
+        release = self._compile_sdk_release
+        if release:
+            return release[0], release[2]
+        return self._number(_RELEASE_SDK)
+
+    @cached_property
+    def compile_sdk_minor(self) -> int | None:
+        """Minor API level of ``compile_sdk`` (``release(37) { minorApiLevel = 1 }`` is 37.1).
+
+        0 for a whole number, ``None`` when the compile SDK is not known.
+        """
+        if self._number(_COMPILE_SDK):
+            return 0
+        release = self._compile_sdk_release
+        if release:
+            return release[1]
+        return 0 if self.compile_sdk else None
 
     @cached_property
     def min_sdk(self) -> tuple[int, int] | None:

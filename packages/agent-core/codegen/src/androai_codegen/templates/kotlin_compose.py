@@ -6,9 +6,12 @@ File contents are written as they should look on disk. ``__NAME__`` marks a plac
 Only plain Gradle Kotlin DSL, a version catalog and the Compose BOM are used. The Android Gradle
 plugin is version 9, which has Kotlin built in: the Kotlin Android plugin is NOT applied (applying
 it on AGP 9 is an error); only the Compose compiler plugin is. ``useAndroidX`` is on by default in
-AGP 9 and is therefore not written out.
+AGP 9 and is therefore not written out. ``compileSdk`` is written as the AGP 9 block, because the
+pinned Compose libraries must be compiled against API 37.1 and ``compileSdk = 37`` means API 37.0
+(``compileSdk { version = release(37) { minorApiLevel = 1 } }``).
 
-None of this has been built with Gradle (see ``versions.py``).
+The default project built with Gradle (see ``VERIFIED_BUILD`` in ``versions.py``): the debug APK,
+nothing more.
 """
 
 from __future__ import annotations
@@ -100,7 +103,11 @@ _APP_BUILD_GRADLE = r"""plugins {
 
 android {
     namespace = "__PACKAGE__"
-    compileSdk = __COMPILE_SDK__
+    compileSdk {
+        version = release(__COMPILE_SDK__) {
+            minorApiLevel = __COMPILE_SDK_MINOR__
+        }
+    }
 
     defaultConfig {
         applicationId = "__APPLICATION_ID__"

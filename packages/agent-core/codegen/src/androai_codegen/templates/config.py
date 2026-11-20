@@ -22,12 +22,17 @@ from .validation import (
 )
 from .versions import (
     DEFAULT_COMPILE_SDK,
+    DEFAULT_COMPILE_SDK_MINOR,
     DEFAULT_MIN_SDK,
     DEFAULT_TARGET_SDK,
     TOOLCHAIN,
 )
 
 MAX_VERSION_CODE = 2_100_000_000  # the Play Store limit
+
+
+def _api(level: int, minor: int) -> str:
+    return f"{level}.{minor}"
 
 
 class Language(StrEnum):
@@ -55,6 +60,9 @@ class ProjectConfig(BaseModel):
     min_sdk: int = Field(default=DEFAULT_MIN_SDK, strict=True)
     target_sdk: int = Field(default=DEFAULT_TARGET_SDK, strict=True)
     compile_sdk: int = Field(default=DEFAULT_COMPILE_SDK, strict=True)
+    # The minor API level of the compile SDK: API 37.1 is ``compile_sdk=37, compile_sdk_minor=1``.
+    # Configs written before this field existed (no minor) keep validating and get the default.
+    compile_sdk_minor: int = Field(default=DEFAULT_COMPILE_SDK_MINOR, strict=True, ge=0)
     version_code: int = Field(default=1, strict=True, ge=1, le=MAX_VERSION_CODE)
     version_name: str = "1.0"
 
@@ -86,17 +94,21 @@ class ProjectConfig(BaseModel):
                 f"min_sdk {self.min_sdk} is below {pins.min_sdk_floor}, the lowest API level the "
                 "pinned AndroidX libraries support"
             )
-        if not pins.compile_sdk_min <= self.compile_sdk <= pins.compile_sdk_max:
+        compile_sdk = (self.compile_sdk, self.compile_sdk_minor)
+        lowest = (pins.compile_sdk_min, pins.compile_sdk_min_minor)
+        highest = (pins.compile_sdk_max, pins.compile_sdk_max_minor)
+        if not lowest <= compile_sdk <= highest:
             raise ValueError(
-                f"compile_sdk {self.compile_sdk} is outside {pins.compile_sdk_min}-"
-                f"{pins.compile_sdk_max}, the range the pinned Compose and Android Gradle plugin "
-                "versions support (see templates/versions.py)"
+                f"compile SDK {self.compile_sdk_full} is outside {_api(*lowest)} to "
+                f"{_api(*highest)}: the lowest is what the pinned Compose libraries need, the "
+                "highest what was validated with the pinned Android Gradle plugin "
+                "(see templates/versions.py)"
             )
         if self.target_sdk < self.min_sdk:
             raise ValueError(f"target_sdk {self.target_sdk} is below min_sdk {self.min_sdk}")
         if self.target_sdk > self.compile_sdk:
             raise ValueError(
-                f"target_sdk {self.target_sdk} is above compile_sdk {self.compile_sdk}"
+                f"target_sdk {self.target_sdk} is above compile SDK {self.compile_sdk_full}"
             )
         return self
 
@@ -105,6 +117,11 @@ class ProjectConfig(BaseModel):
     @property
     def effective_application_id(self) -> str:
         return self.application_id or self.package_name
+
+    @property
+    def compile_sdk_full(self) -> str:
+        """The compile SDK as Android names it: ``37.1`` (API 37, minor level 1)."""
+        return _api(self.compile_sdk, self.compile_sdk_minor)
 
     @property
     def package_path(self) -> str:

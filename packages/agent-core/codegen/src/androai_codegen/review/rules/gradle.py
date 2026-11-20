@@ -12,6 +12,7 @@ from collections.abc import Iterator
 
 from ..analysis import _BUILD_SOURCE, ProjectAnalysis
 from ..catalog import LIB_DEPENDENCIES
+from ..gradle import sdk_label
 from ..models import Finding, Severity, finding
 
 _CATALOG_METHODS = frozenset(
@@ -197,12 +198,13 @@ def _sdk_order(a: ProjectAnalysis) -> Iterator[Finding]:
                 key="min>target",
             )
         if compile_sdk and target_sdk and target_sdk[0] > compile_sdk[0]:
+            compile_label = sdk_label(compile_sdk[0], script.compile_sdk_minor)
             yield finding(
                 Severity.WARNING,
                 "gradle.sdk_order",
                 "dependencies",
                 path,
-                f"targetSdk ({target_sdk[0]}) is higher than compileSdk ({compile_sdk[0]}).",
+                f"targetSdk ({target_sdk[0]}) is higher than compileSdk ({compile_label}).",
                 line=target_sdk[1],
                 fix="Raise compileSdk to at least targetSdk.",
                 key="target>compile",

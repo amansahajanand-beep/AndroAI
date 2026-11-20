@@ -290,6 +290,44 @@ def test_the_review_still_catches_a_broken_generated_project(label, path, old, n
     )
 
 
+def sdk_order_findings(files: dict[str, str]) -> list[tuple[str, str]]:
+    report = ReviewEngine().review(ProjectFiles.from_mapping(files))
+    return [(f.key, f.description) for f in report.findings if f.rule == "gradle.sdk_order"]
+
+
+def test_the_review_reads_the_generated_compile_sdk_block():
+    from androai_codegen.review.gradle import GradleScript
+
+    script = GradleScript("app/build.gradle.kts", mapping()["app/build.gradle.kts"])
+    # API 37.1, read from the multi-line block: the review does not skip this project's SDK levels.
+    assert script.compile_sdk is not None and script.compile_sdk[0] == 37
+    assert script.compile_sdk_minor == 1
+    assert script.min_sdk is not None and script.min_sdk[0] == 24
+    assert script.target_sdk is not None and script.target_sdk[0] == 36
+
+
+def test_sdk_order_is_checked_against_the_generated_compile_sdk():
+    files = mapping()
+    assert sdk_order_findings(files) == []
+    too_high = dict(files)
+    too_high["app/build.gradle.kts"] = files["app/build.gradle.kts"].replace(
+        "targetSdk = 36", "targetSdk = 38"
+    )
+    ((key, description),) = sdk_order_findings(too_high)
+    assert key == "target>compile"
+    assert "targetSdk (38) is higher than compileSdk (37.1)" in description
+    min_above_target = dict(files)
+    min_above_target["app/build.gradle.kts"] = files["app/build.gradle.kts"].replace(
+        "minSdk = 24", "minSdk = 37"
+    )
+    assert [key for key, _ in sdk_order_findings(min_above_target)] == ["min>target"]
+
+
+def test_a_target_equal_to_the_compile_api_level_is_fine_under_37_1():
+    files = {f.path: f.content for f in render_files(make(min_sdk=30, target_sdk=37))}
+    assert sdk_order_findings(files) == []
+
+
 def test_removing_a_generated_file_is_caught_by_the_review():
     files = mapping()
     del files[f"{SRC}/ui/theme/Theme.kt"]

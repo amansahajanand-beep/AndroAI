@@ -77,6 +77,7 @@ def placeholder_values(config: ProjectConfig) -> dict[str, str]:
         "MIN_SDK": str(config.min_sdk),
         "TARGET_SDK": str(config.target_sdk),
         "COMPILE_SDK": str(config.compile_sdk),
+        "COMPILE_SDK_MINOR": str(config.compile_sdk_minor),
         "VERSION_CODE": str(config.version_code),
         "VERSION_NAME": config.version_name,
         "JAVA_VERSION": f"VERSION_{pins.jdk}",

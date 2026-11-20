@@ -9,7 +9,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
 | 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c done** (authentication: 8 new rule ids, 65 tests, 94 of 94 mutations caught; nothing reported on the five real projects unfaulted, 25 of 33 authentication faults injected into them caught, the other 8 silent because the build is not readable enough). **Target SDK resolution done** (a follow-up: `targetSdk` is now also read from a version-catalog entry or a `buildSrc` constant, so the rules that depend on it engage on `iosched` and `sunflower`; 121 tests, 27 of 27 mutations caught, no new finding on the five real projects, 101 of 121 injected faults caught, up from 96). **4b-3 (API use, null safety) not started**. |
-| 5 | New project generation | **In progress. 5.1 done (uncommitted): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Never built with Gradle**; toolchain pins are provisional. Prompt-driven generation, planning and the worker are not started |
+| 5 | New project generation | **In progress. 5.1 done (two local commits on `p3/phase5-templates`, not pushed): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Debug-build verified**: the generated sample project builds with `gradle :app:assembleDebug` in Docker (2026-11-20, AGP 9.5.1, Gradle 9.6.0, Kotlin 2.4.21, Compose BOM 2026.11.01, compileSdk 37.1); release build, lint, tests, emulator and the wrapper were not run. Prompt-driven generation, planning and the worker are not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
 | 8 | Visual editor source mapping | Not started |
@@ -165,7 +165,7 @@ why the rules produced no false positive on five real projects (see below), and 
 | `gradle.unknown_catalog_alias` | error | `libs.x.y` (library, plugin, version or bundle) that `libs.versions.toml` does not define, with a "did you mean" hint. Skipped with several or custom catalogs |
 | `gradle.dependency_missing` | error | an import from one of 19 well-known libraries (`LIB_DEPENDENCIES`) that no dependency of the module, or of the modules it depends on, provides. Compose is deliberately absent because it arrives transitively |
 | `gradle.compose_plugin_missing` | error | `buildFeatures { compose = true }` with a literal Kotlin version >= 2.0 and no `org.jetbrains.kotlin.plugin.compose` plugin |
-| `gradle.sdk_order` | warning | `minSdk > targetSdk` or `targetSdk > compileSdk` (literals in one script) |
+| `gradle.sdk_order` | warning | `minSdk > targetSdk` or `targetSdk > compileSdk` (literals in one script; a `compileSdk { version = release(N) { minorApiLevel = M } }` block counts) |
 | `gradle.duplicate_dependency`, `gradle.conflicting_versions` | warning | the same coordinate twice in one configuration, with or without differing versions |
 | `gradle.unplanned_dependency` | error, approval `other_high_impact` | with `ReviewConfig.permitted_dependencies` set, any library outside the plan (entries: group, `group:artifact`, `group:*`) |
 | `change.component_removed`, `change.permission_removed`, `change.dependency_removed` | warning | something the project had before is gone. A component matches under any spelling of its class (relative or fully qualified), so a package rename is one finding. A dependency is "removed" only if its coordinate is declared nowhere in the project afterwards |
@@ -174,7 +174,7 @@ why the rules produced no false positive on five real projects (see below), and 
 | `change.language_converted` | error, approval `convert_language` | a `.java` file replaced by a `.kt` file of the same name, or the reverse |
 | `change.ui_toolkit_converted` | error, approval `convert_ui_toolkit` | a file that built its screen from XML layouts now uses Compose, or the reverse (judged per file, and only if it stopped using the old toolkit) |
 | `change.tests_removed` | warning | fewer `@Test` methods in total than before (moving a test between files is not reported) |
-| `change.sdk_changed` | warning | `minSdk` raised, or `targetSdk` / `compileSdk` lowered |
+| `change.sdk_changed` | warning | `minSdk` raised, or `targetSdk` / `compileSdk` lowered (for `compileSdk`, 37.1 to 37.0 counts) |
 | `change.component_exported` | warning | a component without an intent filter became exported |
 
 Findings that carry an `approval` are downgraded to non-blocking info ("(approved)") when `ReviewConfig.granted_approvals`
@@ -326,9 +326,19 @@ in a comment or outside `buildSrc` / `build-logic`, a constant declared twice wi
 with the same accessor, a catalog that is missing, broken, not the only `libs.versions.toml` or accompanied by a
 custom catalog, `rootProject.ext`, Gradle properties, conditionals, shared scripts (`apply from:`) and convention
 plugins. A number written directly still wins; otherwise the first `targetSdk` expression that resolves is used.
-`gradle.sdk_order` and `change.sdk_changed` compare several SDK levels and were deliberately **not** changed: they
-still read only numbers written out, so a target that lives in the catalog is not compared there. Authentication rules
-do not depend on the target SDK; only `security.permission_never_requested` (above) does.
+`gradle.sdk_order` and `change.sdk_changed` compare several SDK levels and were deliberately **not** changed for target
+resolution: they still read only numbers written out, so a target that lives in the catalog is not compared there.
+Authentication rules do not depend on the target SDK; only `security.permission_never_requested` (above) does.
+
+**`compileSdk` block (Phase 5.1 follow-up).** The two rules above now also read the AGP 9 form
+`compileSdk { version = release(37) { minorApiLevel = 1 } }`, over one line or several: it is how API 37.1 is written,
+and a plain `compileSdk = 37` is API 37.0. Before, only a same-line `compileSdk ... release(N)` was recognised (and no
+test covered it), so a module using the usual multi-line block was silently skipped by `gradle.sdk_order`. Now the
+API level is compared as before (`targetSdk` is a whole API level, so 37 under compile SDK 37.1 is in order), the
+finding names the minor level (`compileSdk (36.1)`), and `change.sdk_changed` also reports a drop of the minor level
+(37.1 to 37.0). Not read, and still silent: `preview(...)`, a property, a catalog value or arithmetic inside `release(...)`
+(a literal `release(N)` is required, so `release(36 + 1)` is unknown rather than 36), and any `minSdk { }` / `targetSdk { }`
+block form (whether AGP 9 offers one was not checked).
 
 **Not implemented yet (4b-3):** incorrect API use and null safety.
 
@@ -339,10 +349,15 @@ Compose**, single module `:app`. It is a deterministic function from a validated
 no LLM, plans nothing and writes nothing: `PatchEngine` applies the result, so path safety, protection, journal,
 checkpoint and rollback are the existing ones.
 
-> **Not Gradle-verified.** No JDK, Gradle or Android SDK was available where this was written, so no generated
-> project has been built. The tests prove structure, internal consistency, and that the static review accepts the
-> output. They do not prove that Gradle resolves the pinned versions or that the code compiles. The pins in
-> `templates/versions.py` are **provisional** until a real build passes (`PROVISIONAL = True`).
+> **Verified: one debug build.** On 2026-11-20 the sample project (`Notes App`, `com.example.notes`, default config),
+> rendered through `PatchEngine` into an empty workspace, built with `gradle --no-daemon :app:assembleDebug`
+> (**BUILD SUCCESSFUL**, exit 0, no warnings) in a temporary Docker environment and produced a 13.3 MB debug APK:
+> package `com.example.notes`, versionCode 1, minSdk 24, targetSdk 36, compileSdk 37 (API 37.1), launchable activity
+> `MainActivity`. `templates/versions.py` records this as `VERIFIED_BUILD`, and a test fails if a pin changes without
+> it. **Not run:** a release build, `lint`, unit or instrumented tests, an emulator or device, any other package name
+> or SDK level, and the Gradle wrapper (system Gradle 9.6.0 was used, because the wrapper jar and script are not
+> generated). The Python tests prove structure and internal consistency; only the Gradle build proves the project
+> compiles. The first build of the template as originally pinned **failed** (see "Toolchain decisions").
 
 ### Architecture
 
@@ -371,8 +386,8 @@ path and contains no date, host name, random id or absolute path: the same confi
 | `application_id` | `package_name` | At least two segments, each starting with a letter, `[a-zA-Z0-9_]`. May differ from the package |
 | `language`, `ui_toolkit` | `kotlin`, `compose` | `java` and `xml` are valid values but have no template: rendering raises `UnsupportedTemplateError` naming what is available |
 | `min_sdk` | 24 | At least 24 (the floor of the pinned AndroidX libraries) and not above `target_sdk` |
-| `target_sdk` | 36 | Between `min_sdk` and `compile_sdk` |
-| `compile_sdk` | 37 | 37 only: Compose 1.12 and later need compileSdk 37 with AGP 9, and AGP 9.5 supports API 37 at most |
+| `target_sdk` | 36 | Between `min_sdk` and the API level of the compile SDK (37 is allowed under 37.1) |
+| `compile_sdk`, `compile_sdk_minor` | 37, 1 | The compile SDK is API 37 minor level 1, **API 37.1**, and nothing else: the pinned Compose 1.13.0 libraries declare `minCompileSdk=37` and `minCompileMinorSdk=1`, so API 37.0 fails the AAR-metadata check. 37.2 exists in the SDK manager but is not validated, so it is refused. Both fields are strict integers; the pair is checked against `TOOLCHAIN` as (API, minor). A config that gives only `compile_sdk=37` (or an older dump without the minor field) still validates and gets minor 1 |
 | `version_code`, `version_name` | 1, `1.0` | Integer 1 to 2,100,000,000 (strict: no strings or booleans); `[0-9A-Za-z][0-9A-Za-z._+-]*`, at most 40 characters |
 
 ### Generated structure (19 files)
@@ -425,10 +440,25 @@ what the official sources documented on 2026-11-20 (`SOURCES` in `versions.py` h
 | Kotlin | 2.4.21 | Newest final. Used through the `buildscript` classpath entry that the AGP built-in-Kotlin documentation describes, plus the Compose compiler plugin |
 | Compose BOM, activity-compose, navigation-compose | 2026.11.01, 1.13.0, 2.10.2 | Newest finals on Google Maven |
 | JDK | 17 | AGP 9.5's requirement |
-| compileSdk / targetSdk / minSdk | 37 / 36 / 24 | Compose needs 37; Google Play requires 36 or higher for new apps; 24 is the floor of the pinned navigation library |
+| compileSdk / targetSdk / minSdk | 37.1 / 36 / 24 | Compose 1.13.0 needs API 37.1 (found by a real build; the docs said only "37"); Google Play requires 36 or higher for new apps; 24 is the floor of the pinned navigation library |
 
-- **Known gap.** Kotlin's own compatibility table lists AGP 8.5.2 to 9.3.1 for Kotlin 2.4.21, below the pinned 9.5.1.
-  The pair is documented as workable through the classpath override, but nobody has built it.
+- **compileSdk is API 37.1, found by a real build.** The first build, with `compileSdk = 37`, failed in
+  `:app:checkDebugAarMetadata`: the Compose 1.13.0 libraries of BOM 2026.11.01 (`ui`, `foundation`,
+  `foundation-layout`, `animation`, `ui-tooling`, `ui-tooling-data`) declare `minCompileSdk=37` **and**
+  `minCompileMinorSdk=1` in their `aar-metadata.properties` ("compile against version 37.1 or later"), and an integer
+  `compileSdk = 37` is API 37.0. Documentation read earlier said only "37". The template now writes
+  `compileSdk { version = release(37) { minorApiLevel = 1 } }`, `ProjectConfig` has `compile_sdk_minor` (default 1), and
+  the build environment needs the SDK platform `android-37.1`. The same pins built (36 tasks, no warning) once that was
+  changed; no pin was changed. **Alternative that also built** in a throwaway experiment (not adopted): plain
+  `compileSdk = 37` with the older BOM 2026.09.00 (Compose 1.12.1, material3 1.4.0), which needs only platform 37.0 but
+  is not the newest Compose and breaks again at the next BOM that raises the level. Survey of `ui-android`: 1.11.4
+  needs API 35, 1.12.1 needs 37.0, 1.13.0 needs 37.1; AGP's minimum for 1.12 and 1.13 is 9.1.0.
+- **Kotlin 2.4.21 with AGP 9.5.1.** Kotlin's own compatibility table lists AGP 8.5.2 to 9.3.1 for Kotlin 2.4.21, below
+  the pinned 9.5.1. The build resolved the Kotlin Gradle plugin from AGP's bundled 2.2.10 to 2.4.21 through the
+  classpath override, compiled the Kotlin and printed no compatibility warning (`--warning-mode all`). That is evidence
+  for this one build, not an official support statement.
+- **The merged APK carries one permission the template does not declare**: `<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`,
+  added by the AndroidX libraries' manifest merge. The template's own manifest declares none.
 - **Contract defaults differ.** `AndroidTarget` defaults to 35 and is owned by other people; it was not touched. The
   worker adapter that maps it onto `ProjectConfig` must not pass `compile_sdk=35` (rejected) and should decide what to
   do with a `target_sdk` below 36 (accepted here, but Play will not take it for a new app).
@@ -448,13 +478,16 @@ Person 4):
 | JDK | 17 |
 | Gradle / AGP | 9.6.0 / 9.5.1 (provisional until a build passes) |
 | Kotlin / Compose BOM | 2.4.21 / 2026.11.01, pinned in `androai_codegen.templates.versions` |
-| compileSdk / targetSdk / minSdk | 37 / 36 / 24 for generated projects (the `AndroidTarget` default of 35 / 35 / 24 does not build with Compose 1.12 and is not accepted for new Play apps) |
+| compileSdk / targetSdk / minSdk | 37.1 / 36 / 24 for generated projects, with compileSdk written as `compileSdk { version = release(37) { minorApiLevel = 1 } }` (the `AndroidTarget` default of 35 / 35 / 24 does not build with Compose 1.13 and is not accepted for new Play apps; `AndroidTarget` has no minor level) |
 
 ### Limitations
 
-- **Never built.** See the note at the top of this section. A first real build may change versions or DSL details
-  that were read from documentation only: `compileSdk = 37` is written in the plain form and `buildFeatures { compose
-  = true }` is kept, and neither was confirmed against an AGP 9 build.
+- **Built once, debug only.** See the note at the top of this section for what was and was not built. Everything
+  outside that build (other configs, release, lint, tests, emulator, wrapper) is untested. Both DSL details that were
+  uncertain when this was written built under AGP 9.5.1: `buildFeatures { compose = true }`, and the `compileSdk`
+  block (the plain `compileSdk = 37` form turned out to be the wrong one, see above).
+- The template writes `minSdk = N` and `targetSdk = N` as integers, which the review reads. Whether AGP 9 offers
+  `minSdk { }` / `targetSdk { }` block forms was not checked; they are neither generated nor read by the review.
 - Single module, no flavors, no signing configuration, no `local.properties` (protected), no secrets.
 - One template (Kotlin + Compose). Application-ID rules are the documented ones; the Play Store may refuse more.
 - The project name is shown through one string resource. A name with no ASCII letters falls back to the identifier
@@ -912,19 +945,41 @@ mutations are caught, and the original 22 4a mutations still are.
   readability gates described under 4b-2c (AppAuth and Credential Manager on four projects), `AntennaPod`'s `app`
   target in a shared script and its cleartext configuration, and the older 4b-1 and 4b-2a cases.
 
-### Phase 5.1 verification (project templates; uncommitted work on `p3/phase5-templates`, based on `467b82f`)
+### Phase 5.1 verification (project templates; `p3/phase5-templates`, two local commits on top of `467b82f`)
 
 | Check | Result |
 |---|---|
-| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen` | 1419 passed, 5 skipped, 1 xfailed (the 964 / 5 / 1 of `467b82f` plus 455 new tests) |
-| Linux (WSL Ubuntu, Python 3.14.4, ext4), same suite from a fresh export of the working tree | 1423 passed, 1 skipped, 1 xfailed |
+| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen` | 1495 passed, 5 skipped, 1 xfailed (the 964 / 5 / 1 of `467b82f` plus 531 new tests) |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4), same suite from a fresh export of the working tree | 1499 passed, 1 skipped, 1 xfailed |
 | `ruff check`, `ruff format --check`, `compileall` | clean on both platforms |
-| New tests | 455 in five files: validation 206, config 70, render 59, Kotlin/Compose template 83, patch and review compatibility 37 |
-| Mutation testing of the new code (each mutation must fail a template test) | 120 of 120 caught; the first run caught 114 of 115: the survivor changed the JDK pin to 11, so a test that AGP 9.5's JDK 17 floor holds was added. Five more mutations (manifest style reference, namespace dropped or misplaced, night style renamed, missing colour reference) are caught by the new reference and namespace tests alone |
-| **Gradle build of the generated project** | **Not run. No JDK, Gradle or Android SDK is available in the environment.** |
+| New tests | 531 in six files: validation 206, config 96, render 59, Kotlin/Compose template 83, patch and review compatibility 40, review of the `compileSdk` block 47 |
+| Mutation testing (each mutation must fail a test) | Templates: 120 of 120 caught (the first run caught 114 of 115; the survivor changed the JDK pin, so a test of AGP 9.5's JDK 17 floor was added). `compileSdk` 37.1 work: 41 of 41 caught (36 on the first run: four patterns did not match because the tracked files use CRLF, and one mutant was equivalent under the current pins until a test with a widened minor range pinned it) |
+| Review engine on five real projects (nowinandroid, iosched, sunflower, platform-samples, AntennaPod), `467b82f` against the working tree | Identical reports (same 37 lines, same findings; none from `gradle.sdk_order`, `change.sdk_changed` or an internal error). None of the five uses the `compileSdk` block, so no behaviour changes there, as expected |
+| **Gradle build of the generated project** | **First build FAILED, second build SUCCEEDED** (below) |
 
 The 5 Windows skips and the Linux skip are the existing platform-specific tests listed below; the xfail is the existing
 one. The new tests need no `git` except one `CheckpointManager` test, which skips without it.
+
+**Gradle builds (Docker, 2026-11-20).** A temporary image on `eclipse-temurin:17-jdk-jammy` (Temurin 17.0.21) with Gradle
+9.6.0 and the Android command-line tools 15859902, each download checked against its published SHA-256, and the SDK
+packages `platforms;android-37.0`, `platforms;android-37.1`, `build-tools;36.0.0` and `platform-tools` (SDK licences were
+accepted inside the temporary container volume only). System Gradle was used, because the wrapper jar and script are not
+generated. The Dockerfile and volumes are outside the repository (nothing of Person 4's was touched).
+
+| Build | `compileSdk` | Result |
+|---|---|---|
+| 1. The Phase 5.1 template as first committed (`7b07126`), rendered through `PatchEngine` | `compileSdk = 37` (API 37.0) | **FAILED** after 2m56s in `:app:checkDebugAarMetadata`: six Compose 1.13.0 AARs require API 37.1 or later (`minCompileSdk=37`, `minCompileMinorSdk=1`) |
+| 2. The corrected template, rendered through `PatchEngine` into an empty workspace (19 files; only `app/build.gradle.kts` differs from build 1, so no pin changed) | `compileSdk { version = release(37) { minorApiLevel = 1 } }` | **BUILD SUCCESSFUL**, exit 0, 36 tasks, 36s, no warnings |
+
+Build 2 produced `app/build/outputs/apk/debug/app-debug.apk` (13,314,159 bytes, SHA-256 `834ac583...e26b`): package
+`com.example.notes`, versionCode 1, versionName `1.0`, minSdk 24, targetSdk 36, compileSdk 37 (API 37.1, which `aapt2`
+prints as 37), launchable activity `com.example.notes.MainActivity`, label `Notes App`, debuggable, AGP 9.5.1 recorded in
+the APK's app-metadata. Resolved by Gradle: Kotlin Gradle plugin 2.2.10 (AGP's own) replaced by 2.4.21, Compose compiler
+plugin 2.4.21, Compose BOM 2026.11.01 (ui 1.13.0, material3 1.5.0), activity-compose 1.13.0. Two throwaway
+copies of the first project (one with the block form of `compileSdk`, one with BOM 2026.09.00 and a plain
+`compileSdk = 37`) had already built before the template was changed; the APK of the first is byte-identical to build 2's.
+Only the debug build was run: **not** `assembleRelease`, `lint`, unit or instrumented tests, an emulator or device, other
+package names or SDK levels, or the wrapper.
 
 What the template tests cover: valid and invalid package names (including every Kotlin hard keyword and Java reserved
 word, Windows device names, leading/trailing/double dots, uppercase, non-ASCII, control characters), application IDs,
@@ -951,9 +1006,19 @@ is what `.MainActivity`, the package declarations and the `R` import resolve aga
 manifest and in the resource files, and every project-defined `parent` style, resolves to a resource defined in the
 default `values` directory (not only in `values-night`). The checker itself is tested against deliberately broken copies.
 
-Not done for 5.1: the five real-project review runs and fault injection (the review engine is unchanged); the contracts,
-worker and CI suites (nothing there was touched). `pyproject.toml` gained one `E501` per-file ignore for
-`templates/kotlin_compose.py`, because a TOML inline table of the version catalog cannot be wrapped.
+The `compileSdk` work adds tests for: API 37.1 rendered in the Gradle file and not hard-coded (a widened range renders
+37.2), invalid minor levels (0, 2, 99, negative, other API levels, non-integers and booleans), the pair compared as
+(API, minor), `targetSdk` compared with the API level only, configs and dumps written before the minor field (still valid),
+the review reading the block (multi-line, one-line, Kotlin and Groovy DSL, spacing variants, nested braces, line numbers,
+comments and strings ignored, `preview(...)`, variables, arithmetic and unclosed blocks unknown without a crash),
+`gradle.sdk_order` on the block (target above compile, min above target, an equal target under 37.1 in order, unreadable
+block silent, warnings not blocking), `change.sdk_changed` (lowered API level, 37.1 to 37.0, whole number to block), and the
+rendered project's own SDK levels read back by the review.
+
+Not done for 5.1: fault injection into the five real projects (the real-project run above is a before-and-after
+comparison of unmodified projects); the contracts, worker and CI suites (nothing there was touched). `pyproject.toml`
+gained one `E501` per-file ignore for `templates/kotlin_compose.py`, because a TOML inline table of the version catalog
+cannot be wrapped.
 
 ### Platform coverage (Windows and Linux together)
 
@@ -1196,18 +1261,21 @@ Phase 4b-2c (authentication):
     `Image`, `RadioButton`, `Snackbar`); another such name used with a wildcard import of its framework package would
     still be reported until it is added. The probe that found these checked twenty well-known names, not every class.
 
-Phase 5.1 (project templates): see "Project templates (Phase 5.1)" above. In short: the template has **never been built
-with Gradle**, its toolchain pins are provisional, there is one template (Kotlin + Compose, one module), the wrapper
-jar and scripts are not generated, and two kinds of breakage in a generated project are not caught by the review.
+Phase 5.1 (project templates): see "Project templates (Phase 5.1)" above. In short: the default project's **debug build
+was verified once** with Gradle (the first build failed on compileSdk 37.0 and was fixed with API 37.1); release, lint,
+tests, emulator, other configs and the wrapper are untested, there is one template (Kotlin + Compose, one module), the
+wrapper jar and scripts are not generated, and two kinds of breakage in a generated project are not caught by the review
+(they are covered by the template tests instead).
 
 ## Unfinished integration work
 
 Not done:
 
 - **Phase 4b-3** (API-use and null-safety rules).
-- **A real Gradle build of the Phase 5.1 template.** The pins in `templates/versions.py` are documented but untested;
-  a build (for example in the `android-build` image, once it has a JDK and Android SDK) must pass before they are
-  called a tested pair. Needs Person 4's build environment.
+- **More builds of the Phase 5.1 template.** Only the debug build of the default project was run (in a temporary Docker
+  image kept outside the repository). Still to do: `assembleRelease`, `lint`, the unit-test task, an emulator run, other
+  package names and SDK levels, and a build with the Gradle wrapper. That belongs in the `android-build` image, which
+  needs a JDK and the Android SDK (platform 37.1, build-tools 36.0.0): Person 4's environment.
 - **More real-project validation** (see Phase 4 limitations): five projects have been reviewed in total, and the
   older rules still showed false positives on two of the newer ones; more are needed before any finding is
   allowed to block a patch in production.

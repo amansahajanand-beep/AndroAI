@@ -9,6 +9,7 @@ import pytest
 from androai_codegen.templates import (
     PROVISIONAL,
     TOOLCHAIN,
+    VERIFIED_BUILD,
     ProjectConfig,
     render_files,
 )
@@ -229,7 +230,15 @@ def test_app_build_gradle(files):
     app = files["app/build.gradle.kts"]
     assert 'namespace = "com.example.notes"' in app
     assert 'applicationId = "com.example.notes"' in app
-    assert "minSdk = 24\n" in app and "targetSdk = 36\n" in app and "compileSdk = 37\n" in app
+    assert "minSdk = 24\n" in app and "targetSdk = 36\n" in app
+    # compileSdk is API 37.1, which only the AGP 9 block can say (an integer is API 37.0).
+    assert (
+        "    compileSdk {\n"
+        "        version = release(37) {\n"
+        "            minorApiLevel = 1\n"
+        "        }\n"
+        "    }\n"
+    ) in app
     assert "versionCode = 1\n" in app and 'versionName = "1.0"' in app
     assert f"sourceCompatibility = JavaVersion.VERSION_{TOOLCHAIN.jdk}" in app
     assert f"targetCompatibility = JavaVersion.VERSION_{TOOLCHAIN.jdk}" in app
@@ -280,8 +289,27 @@ def test_the_jdk_meets_what_agp_9_5_requires():
     assert TOOLCHAIN.jdk >= 17
 
 
-def test_the_pins_are_marked_provisional():
-    assert PROVISIONAL is True
+def test_the_pins_are_the_ones_that_were_built():
+    # Changing a pin without rebuilding must not keep claiming "verified": update VERIFIED_BUILD
+    # (and rebuild) together with the pin.
+    assert PROVISIONAL is False
+    for field in (
+        "agp",
+        "gradle",
+        "kotlin",
+        "compose_bom",
+        "activity_compose",
+        "navigation_compose",
+        "jdk",
+    ):
+        assert VERIFIED_BUILD[field] == getattr(TOOLCHAIN, field), field
+    config = make()
+    assert (VERIFIED_BUILD["min_sdk"], VERIFIED_BUILD["target_sdk"]) == (
+        config.min_sdk,
+        config.target_sdk,
+    )
+    assert VERIFIED_BUILD["compile_sdk"] == config.compile_sdk_full
+    assert VERIFIED_BUILD["task"] == ":app:assembleDebug"
     assert TOOLCHAIN.min_sdk_floor <= 24 <= 36 <= TOOLCHAIN.compile_sdk_min
 
 

@@ -1,8 +1,9 @@
 """Reusable Android project templates, rendered as a ``PatchSet``.
 
 Phase 5.1 ships one template: Kotlin + Jetpack Compose. Rendering is pure and deterministic and
-never touches a workspace; ``PatchEngine`` applies the result. The toolchain versions are
-provisional until a real Gradle build has passed (see ``versions.py``).
+never touches a workspace; ``PatchEngine`` applies the result. The toolchain versions in
+``versions.py`` were built once (the debug APK of the default project); ``VERIFIED_BUILD`` says
+exactly what that covers, and what it does not.
 """
 
 from .config import Language, ProjectConfig, UiToolkit
@@ -24,11 +25,12 @@ from .validation import (
     validate_project_name,
     validate_version_name,
 )
-from .versions import PROVISIONAL, TOOLCHAIN, ToolchainPins
+from .versions import PROVISIONAL, TOOLCHAIN, VERIFIED_BUILD, ToolchainPins
 
 __all__ = [
     "PROVISIONAL",
     "TOOLCHAIN",
+    "VERIFIED_BUILD",
     "Language",
     "ProjectConfig",
     "RenderedFile",

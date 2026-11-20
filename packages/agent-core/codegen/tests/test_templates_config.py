@@ -18,6 +18,7 @@ from androai_codegen.templates.naming import (
 )
 from androai_codegen.templates.versions import (
     DEFAULT_COMPILE_SDK,
+    DEFAULT_COMPILE_SDK_MINOR,
     DEFAULT_MIN_SDK,
     DEFAULT_TARGET_SDK,
 )
@@ -175,7 +176,147 @@ def test_sdk_levels_reach_the_gradle_file():
     app = files["app/build.gradle.kts"]
     assert "minSdk = 26\n" in app
     assert "targetSdk = 36\n" in app
-    assert f"compileSdk = {DEFAULT_COMPILE_SDK}\n" in app
+    assert (
+        "    compileSdk {\n"
+        f"        version = release({DEFAULT_COMPILE_SDK}) {{\n"
+        f"            minorApiLevel = {DEFAULT_COMPILE_SDK_MINOR}\n"
+        "        }\n"
+        "    }\n"
+    ) in app
+    assert "compileSdk = " not in app  # an integer would mean API 37.0, which Compose 1.13 rejects
+
+
+# --- the minor API level of the compile SDK (API 37.1) ----------------------------------------
+
+
+def test_the_default_compile_sdk_is_api_37_1():
+    cfg = make()
+    assert (cfg.compile_sdk, cfg.compile_sdk_minor) == (37, 1)
+    assert cfg.compile_sdk_full == "37.1"
+    # The pinned Compose libraries need exactly this; an integer compileSdk = 37 means API 37.0.
+    assert (TOOLCHAIN.compile_sdk_min, TOOLCHAIN.compile_sdk_min_minor) == (37, 1)
+
+
+def test_the_minor_level_is_part_of_the_compile_sdk_range():
+    low = (TOOLCHAIN.compile_sdk_min, TOOLCHAIN.compile_sdk_min_minor)
+    high = (TOOLCHAIN.compile_sdk_max, TOOLCHAIN.compile_sdk_max_minor)
+    assert low <= (DEFAULT_COMPILE_SDK, DEFAULT_COMPILE_SDK_MINOR) <= high
+    assert (
+        make(compile_sdk=low[0], compile_sdk_minor=low[1]).compile_sdk_full == f"{low[0]}.{low[1]}"
+    )
+    assert make(compile_sdk=high[0], compile_sdk_minor=high[1]).compile_sdk_full == (
+        f"{high[0]}.{high[1]}"
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"compile_sdk_minor": 0},  # API 37.0: Compose 1.13.0 rejects it (real build, 2026-11-20)
+        {"compile_sdk_minor": TOOLCHAIN.compile_sdk_min_minor - 1},
+        {"compile_sdk_minor": TOOLCHAIN.compile_sdk_max_minor + 1},
+        {"compile_sdk_minor": 2},  # exists in the SDK manager, not validated here
+        {"compile_sdk_minor": 99},
+        {"compile_sdk_minor": -1},
+        {"compile_sdk": TOOLCHAIN.compile_sdk_min - 1, "compile_sdk_minor": 1},
+        {"compile_sdk": TOOLCHAIN.compile_sdk_max + 1, "compile_sdk_minor": 0},
+        {"compile_sdk": TOOLCHAIN.compile_sdk_max + 1, "compile_sdk_minor": 1},
+        {"compile_sdk": 36, "compile_sdk_minor": 1},  # API 36.1 is not 37.1
+        {"compile_sdk": 36, "compile_sdk_minor": 0},
+    ],
+)
+def test_invalid_minor_api_levels_and_pairs(kwargs):
+    with pytest.raises(ValidationError):
+        make(**kwargs)
+
+
+def test_the_error_for_an_unsupported_minor_level_names_the_levels():
+    with pytest.raises(ValidationError, match=r"compile SDK 37\.0 is outside 37\.1 to 37\.1"):
+        make(compile_sdk_minor=0)
+    with pytest.raises(ValidationError, match=r"compile SDK 37\.2 is outside"):
+        make(compile_sdk_minor=2)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"compile_sdk_minor": "1"},
+        {"compile_sdk_minor": 1.0},
+        {"compile_sdk_minor": True},
+        {"compile_sdk_minor": None},
+        {"compile_sdk_minor": [1]},
+    ],
+)
+def test_the_minor_level_is_a_strict_integer(kwargs):
+    with pytest.raises(ValidationError):
+        make(**kwargs)
+
+
+def test_target_sdk_is_compared_with_the_api_level_of_the_compile_sdk():
+    # targetSdk is a whole API level: 37 is fine under compile SDK 37.1, 38 is not.
+    assert make(target_sdk=37).target_sdk == 37
+    with pytest.raises(ValidationError, match=r"above compile SDK 37\.1"):
+        make(target_sdk=38)
+
+
+# Backward compatibility: configs, dumps and calls written before the minor level existed.
+
+
+def test_a_config_without_a_minor_level_still_validates_and_gets_the_default():
+    cfg = make(compile_sdk=37)
+    assert (cfg.compile_sdk, cfg.compile_sdk_minor) == (37, DEFAULT_COMPILE_SDK_MINOR)
+
+
+def test_an_old_dump_without_the_minor_field_still_validates():
+    old = make().model_dump()
+    del old["compile_sdk_minor"]
+    assert ProjectConfig.model_validate(old) == make()
+    assert ProjectConfig.model_validate_json('{"project_name": "A", "package_name": "com.a"}')
+
+
+def test_an_old_compile_sdk_that_never_built_is_still_rejected():
+    for level in (33, 34, 35, 36):
+        with pytest.raises(ValidationError):
+            make(compile_sdk=level)
+
+
+def test_every_other_default_and_rule_is_unchanged():
+    cfg = make()
+    assert (cfg.min_sdk, cfg.target_sdk) == (24, 36)
+    assert (cfg.version_code, cfg.version_name) == (1, "1.0")
+    assert cfg.effective_application_id == cfg.package_name
+
+
+def test_the_minor_level_reaches_the_gradle_file_and_is_not_hard_coded(monkeypatch):
+    from dataclasses import replace
+
+    from androai_codegen.templates import config as config_module
+
+    widened = replace(TOOLCHAIN, compile_sdk_max_minor=2)
+    monkeypatch.setattr(config_module, "TOOLCHAIN", widened)
+    app = {f.path: f.content for f in render_files(make(compile_sdk_minor=2))}[
+        "app/build.gradle.kts"
+    ]
+    assert "version = release(37) {\n            minorApiLevel = 2\n" in app
+    assert make(compile_sdk_minor=2).compile_sdk_full == "37.2"
+
+
+def test_target_sdk_equal_to_the_compile_api_level_is_valid_at_any_minor_level(monkeypatch):
+    from dataclasses import replace
+
+    from androai_codegen.templates import config as config_module
+
+    # Only 37.1 is allowed by the real pins; widen them to prove that the comparison with
+    # targetSdk looks at the API level alone (a whole number), whatever the minor level is.
+    monkeypatch.setattr(
+        config_module,
+        "TOOLCHAIN",
+        replace(TOOLCHAIN, compile_sdk_min_minor=0, compile_sdk_max_minor=3),
+    )
+    for minor in (0, 1, 3):
+        assert make(compile_sdk_minor=minor, target_sdk=37).target_sdk == 37
+        with pytest.raises(ValidationError, match="above compile SDK"):
+            make(compile_sdk_minor=minor, target_sdk=38)
 
 
 # --- language / UI toolkit ------------------------------------------------------------------

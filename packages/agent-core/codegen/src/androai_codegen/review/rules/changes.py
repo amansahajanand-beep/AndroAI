@@ -20,6 +20,7 @@ from ..catalog import (
     SPECIAL_ACCESS_PERMISSIONS,
     AuthIntegration,
 )
+from ..gradle import sdk_label
 from ..models import Finding, Severity, finding
 from .manifest import _fqn, _nodes, _removed
 
@@ -383,17 +384,25 @@ def _sdk(before: ProjectAnalysis, after: ProjectAnalysis) -> Iterator[Finding]:
                 line=new.min_sdk[1],
                 key=f"{path}:minSdk",
             )
-        for label, was, now in (
-            ("targetSdk", old.target_sdk, new.target_sdk),
-            ("compileSdk", old.compile_sdk, new.compile_sdk),
+        for label, was, now, was_minor, now_minor in (
+            ("targetSdk", old.target_sdk, new.target_sdk, 0, 0),
+            (
+                "compileSdk",
+                old.compile_sdk,
+                new.compile_sdk,
+                old.compile_sdk_minor,
+                new.compile_sdk_minor,
+            ),
         ):
-            if was and now and now[0] < was[0]:
+            # The minor API level counts: 37.1 -> 37.0 is a downgrade (only compileSdk has one).
+            if was and now and (now[0], now_minor or 0) < (was[0], was_minor or 0):
                 yield finding(
                     Severity.WARNING,
                     "change.sdk_changed",
                     "changes",
                     path,
-                    f"{label} is lowered from {was[0]} to {now[0]}.",
+                    f"{label} is lowered from {sdk_label(was[0], was_minor)} "
+                    f"to {sdk_label(now[0], now_minor)}.",
                     line=now[1],
                     key=f"{path}:{label}",
                 )
