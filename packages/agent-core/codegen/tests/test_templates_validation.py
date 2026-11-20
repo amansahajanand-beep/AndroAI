@@ -85,6 +85,20 @@ def test_an_empty_segment_is_named_as_such(value):
         validate_package_name(value)
 
 
+def test_the_errors_for_empty_single_segment_and_oversized_names_say_so():
+    # The same helper serves package names and application IDs; each message names its subject.
+    for validate, what in (
+        (validate_package_name, "package name"),
+        (validate_application_id, "application ID"),
+    ):
+        with pytest.raises(ValueError, match=f"{what} is empty"):
+            validate("")
+        with pytest.raises(ValueError, match=f"{what} needs at least two segments"):
+            validate("example")
+        with pytest.raises(ValueError, match=f"{what} is longer than {MAX_PACKAGE_LENGTH}"):
+            validate("com." + "a" * MAX_PACKAGE_LENGTH)
+
+
 @pytest.mark.parametrize("value", [None, 5, b"com.example", ["com", "example"], True])
 def test_package_name_must_be_a_string(value):
     with pytest.raises(ValueError, match="string"):

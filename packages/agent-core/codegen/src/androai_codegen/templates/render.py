@@ -12,6 +12,8 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from ..editing.errors import PathValidationError
+from ..editing.paths import normalize_relative_path
 from .errors import TemplateRenderError
 
 PLACEHOLDER = re.compile(r"__([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*)__")
@@ -53,6 +55,31 @@ def substitute(text: str, values: Mapping[str, str], *, where: str) -> str:
             ) from None
 
     return PLACEHOLDER.sub(replace, text)
+
+
+def check_rendered_path(source: str, path: str) -> None:
+    """Refuse a rendered path that is unsafe or not canonical (``source`` names its origin)."""
+    try:
+        canonical = normalize_relative_path(path)
+    except PathValidationError as exc:
+        raise TemplateRenderError(f"{source!r} rendered to an unsafe path: {exc}") from exc
+    if canonical != path:
+        raise TemplateRenderError(f"{source!r} rendered to a non-canonical path {path!r}")
+
+
+def check_content(path: str, content: str) -> None:
+    """Refuse content that is not LF text ending in a newline."""
+    if "\x00" in content or "\r" in content:
+        raise TemplateRenderError(f"{path}: content has a NUL or a carriage return")
+    if not content.endswith("\n"):
+        raise TemplateRenderError(f"{path}: content must end with a newline")
+
+
+def checked_file(path: str, content: str, description: str) -> RenderedFile:
+    """A file produced by code rather than by a template, held to the same rules."""
+    check_rendered_path(path, path)
+    check_content(path, content)
+    return RenderedFile(path, content, description)
 
 
 def android_string(value: str) -> str:
