@@ -12,8 +12,9 @@ pinned Compose libraries must be compiled against API 37.1 and ``compileSdk = 37
 
 The default project was built with Gradle (see ``VERIFIED_BUILD`` in ``versions.py`` for what ran).
 ``app/build.gradle.kts`` also enables Android resources and host (unit) tests for every variant: AGP
-9.5.1 otherwise fails to create its Compose Preview tasks, so ``gradle tasks --all`` fails. No
-generated unit test exists.
+9.5.1 otherwise fails to create its Compose Preview tasks, so ``gradle tasks --all`` fails. This
+default project has no unit test; a project rendered from a ``ProjectSpec`` gets generated
+navigation tests and their test dependencies (``navtests.py``).
 """
 
 from __future__ import annotations

@@ -138,31 +138,41 @@ def test_render_patch_without_a_spec_is_unchanged():
 # --- which files a spec produces ------------------------------------------------------------------
 
 
-def test_the_spec_replaces_the_sample_screen_navigation_and_strings_only():
+TEST = "app/src/test/java/com/example/notes/navigation/NavigationTest.kt"
+# Phase 5.3 adds the test dependencies to these two files (see test_templates_navtests.py).
+TEST_DEPENDENCY_FILES = {"app/build.gradle.kts", "gradle/libs.versions.toml"}
+
+
+def test_the_spec_replaces_the_sample_screen_navigation_and_strings_and_adds_the_test():
     base, with_spec = rendered(), rendered(spec=THREE)
     removed = set(base) - set(with_spec)
     added = set(with_spec) - set(base)
     changed = {p for p in set(base) & set(with_spec) if base[p] != with_spec[p]}
     assert removed == {f"{ROOT}/ui/home/HomeScreen.kt"}
-    assert added == {f"{ROOT}/ui/screens/{n}Screen.kt" for n in ("Home", "Settings", "About")}
-    assert changed == {NAV, STRINGS}
-    assert len(with_spec) == 19 - 1 + 3
+    assert added == {f"{ROOT}/ui/screens/{n}Screen.kt" for n in ("Home", "Settings", "About")} | {
+        TEST
+    }
+    assert changed == {NAV, STRINGS} | TEST_DEPENDENCY_FILES
+    assert len(with_spec) == 19 - 1 + 3 + 1
 
 
-def test_every_other_file_is_byte_identical_gradle_manifest_theme_and_all():
+def test_every_other_file_is_byte_identical_manifest_theme_activity_and_all():
     base, with_spec = rendered(), rendered(spec=THREE)
-    untouched = set(base) - {NAV, STRINGS, f"{ROOT}/ui/home/HomeScreen.kt"}
+    untouched = set(base) - {NAV, STRINGS, f"{ROOT}/ui/home/HomeScreen.kt"} - TEST_DEPENDENCY_FILES
     assert {
-        "app/build.gradle.kts",
-        "gradle/libs.versions.toml",
+        "settings.gradle.kts",
+        "build.gradle.kts",
+        "gradle/wrapper/gradle-wrapper.properties",
         "app/src/main/AndroidManifest.xml",
+        f"{ROOT}/MainActivity.kt",
     } <= untouched
     assert all(base[p] == with_spec[p] for p in untouched)
 
 
-def test_a_single_screen_project_has_the_same_number_of_files_as_phase_5_1():
+def test_a_single_screen_project_has_the_files_of_phase_5_1_plus_the_navigation_test():
     files = rendered(spec=ONE)
-    assert len(files) == 19
+    assert len(files) == 19 + 1
+    assert TEST in files
     assert f"{ROOT}/ui/screens/HomeScreen.kt" in files
     assert f"{ROOT}/ui/home/HomeScreen.kt" not in files
 
@@ -193,6 +203,7 @@ def test_every_generated_kotlin_file_is_well_formed(name):
         if not path.endswith(".kt"):
             continue
         directory = path.rsplit("/", 1)[0].removeprefix("app/src/main/java/")
+        directory = directory.removeprefix("app/src/test/java/")
         assert re.match(rf"package {re.escape(directory.replace('/', '.'))}\n", content), path
         imports = imports_of(content)
         assert imports == sorted(imports) and len(imports) == len(set(imports)), path
@@ -400,7 +411,7 @@ def test_the_output_has_no_date_host_or_path():
 
 def test_the_largest_project_is_far_inside_the_patch_limits():
     files = render_files(make(), big_spec(12))
-    assert len(files) == 19 - 1 + 12
+    assert len(files) == 19 - 1 + 12 + 1
     assert len(files) <= 500
     assert sum(len(f.content.encode()) for f in files) < 2 * 1024 * 1024
     assert big_spec(12).screens[0].navigates_to  # the big spec really has edges
@@ -466,7 +477,7 @@ def test_the_patch_previews_applies_byte_for_byte_and_rolls_back(engine, ws_root
     patch = render_patch(make(), **IDS, spec=THREE)
     assert engine.preview(patch).ok
     result = engine.apply(patch)
-    assert len(result.records) == 21
+    assert len(result.records) == 22
     written = {
         p.relative_to(ws_root).as_posix(): p.read_bytes() for p in ws_root.rglob("*") if p.is_file()
     }
@@ -485,7 +496,7 @@ def test_a_project_is_not_created_over_an_existing_one(engine):
 
 def test_the_patch_can_be_created_with_a_checkpoint(manager, ws_root):
     tracked = manager.apply(render_patch(make(), **IDS, spec=THREE))
-    assert len(tracked.result.records) == 21
+    assert len(tracked.result.records) == 22
     assert (ws_root / f"{ROOT}/ui/screens/AboutScreen.kt").is_file()
 
 

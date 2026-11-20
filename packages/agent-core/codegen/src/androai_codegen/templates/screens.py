@@ -23,6 +23,7 @@ from .spec import ProjectSpec, ScreenSpec, route_constant, route_of
 
 STRINGS_PATH = "app/src/main/res/values/strings.xml"
 BACK_STRING = "action_back"
+BACK_TEXT = "Back"
 
 
 def _java_root(config: ProjectConfig) -> str:
@@ -65,7 +66,7 @@ def strings_xml(config: ProjectConfig, spec: ProjectSpec) -> str:
                 f"{android_string(screen.description)}</string>"
             )
     if any(not _is_start(spec, screen) for screen in spec.screens):
-        lines.append(f'    <string name="{BACK_STRING}">Back</string>')
+        lines.append(f'    <string name="{BACK_STRING}">{BACK_TEXT}</string>')
     lines.append("</resources>")
     return "\n".join(lines) + "\n"
 
@@ -160,6 +161,7 @@ def nav_host_source(config: ProjectConfig, spec: ProjectSpec) -> str:
     imports = {
         "androidx.compose.runtime.Composable",
         "androidx.compose.ui.Modifier",
+        "androidx.navigation.NavHostController",
         "androidx.navigation.compose.NavHost",
         "androidx.navigation.compose.composable",
         "androidx.navigation.compose.rememberNavController",
@@ -174,9 +176,10 @@ def nav_host_source(config: ProjectConfig, spec: ProjectSpec) -> str:
         "}",
         "",
         "@Composable",
-        "fun AppNavHost(modifier: Modifier = Modifier) {",
-        "    val navController = rememberNavController()",
-        "",
+        "fun AppNavHost(",
+        "    modifier: Modifier = Modifier,",
+        "    navController: NavHostController = rememberNavController(),",
+        ") {",
         "    NavHost(",
         "        navController = navController,",
         f"        startDestination = Routes.{route_constant(spec.start_name)},",

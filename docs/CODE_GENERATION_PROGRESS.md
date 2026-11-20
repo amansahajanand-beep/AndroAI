@@ -9,7 +9,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
 | 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c done** (authentication: 8 new rule ids, 65 tests, 94 of 94 mutations caught; nothing reported on the five real projects unfaulted, 25 of 33 authentication faults injected into them caught, the other 8 silent because the build is not readable enough). **Target SDK resolution done** (a follow-up: `targetSdk` is now also read from a version-catalog entry or a `buildSrc` constant, so the rules that depend on it engage on `iosched` and `sunflower`; 121 tests, 27 of 27 mutations caught, no new finding on the five real projects, 101 of 121 injected faults caught, up from 96). **4b-3 (API use, null safety) not started**. |
-| 5 | New project generation | **In progress. 5.1 done (branch `p3/phase5-templates`, draft PR): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Build-verified for the default template configuration only** (Docker, 2026-11-20, AGP 9.5.1, Gradle 9.6.0, Kotlin 2.4.21, Compose BOM 2026.11.01, compileSdk 37.1): debug APK, release APK and AAB (both **unsigned**), `build`, `lint` (0 errors, 4 warnings, left as known limitations) and `tasks --all` pass. **No application unit tests exist yet** (`test` passes with nothing to run). No emulator or device run, no signing, no other configuration, no Gradle wrapper. **5.2 done (local branch `p3/phase5-screens`, not pushed): multi-screen projects from a structured `ProjectSpec`** (deterministic, no LLM), build-verified on four sample specs with the same Gradle commands (see "Phase 5.2"): no application unit tests, no signing, no emulator run. Prompt-driven generation, planning and the worker are not started |
+| 5 | New project generation | **In progress. 5.1 done (branch `p3/phase5-templates`, draft PR): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Build-verified for the default template configuration only** (Docker, 2026-11-20, AGP 9.5.1, Gradle 9.6.0, Kotlin 2.4.21, Compose BOM 2026.11.01, compileSdk 37.1): debug APK, release APK and AAB (both **unsigned**), `build`, `lint` (0 errors, 4 warnings, left as known limitations) and `tasks --all` pass. **The default project (no spec) has no application unit test** (`test` passes with nothing to run), no signing, no other configuration, no Gradle wrapper. **5.2 done (branch `p3/phase5-screens`, pushed, stacked on 5.1): multi-screen projects from a structured `ProjectSpec`** (deterministic, no LLM), build-verified on four sample specs with the same Gradle commands (see "Phase 5.2"); the three-screen sample was also **run once on an Android 17 emulator** (navigation, Back, rotation, logcat; see "Phase 5.2 sample on an emulator"). **5.3 done (local branch `p3/phase5-nav-tests`, not pushed): generated navigation tests** for projects with a spec (Robolectric + Compose test, test-only dependencies; see "Generated navigation tests (Phase 5.3)"): the debug unit tests pass on the four sample specs and fail when the generated navigation is broken (mutation-checked); they simulate API 35 on JDK 17, the release unit-test task is skipped, and no instrumented test exists. Prompt-driven generation, planning and the worker are not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
 | 8 | Visual editor source mapping | Not started |
@@ -356,8 +356,9 @@ checkpoint and rollback are the existing ones.
 > `tasks --all`, and the Compose Preview run-files tasks. Outputs: a debug APK, an **unsigned** release APK and an
 > **unsigned** release AAB. `templates/versions.py` records this as `VERIFIED_BUILD`, and a test fails if a pin changes
 > without it. **Not verified:** signing (so the release outputs cannot be installed or uploaded as they are), an
-> emulator or device run, any application unit test (**none exists yet**: the app has no logic of its own, so no
-> test was added just to make Gradle report one, and `test` passes with nothing to run), any other package name or SDK
+> emulator or device run, any application unit test (**none exists in this default project**: the app has no logic of
+> its own, so no test was added just to make Gradle report one, and `test` passes with nothing to run; Phase 5.3 later
+> generated navigation tests, but only for a project with a spec), any other package name or SDK
 > level, and the Gradle wrapper (system Gradle 9.6.0 was used, because the wrapper jar and script are not generated).
 > The Python tests prove structure and internal consistency; only the Gradle build proves the project compiles. Two
 > earlier results were failures that changed the template: the first build failed on compileSdk 37.0, and `tasks --all`
@@ -512,9 +513,10 @@ Person 4):
   signed and `jarsigner -verify` finds no manifest in the AAB, so neither can be installed or uploaded to Google Play
   as it is. Release builds are not shrunk (`isMinifyEnabled = false`), so the release APK is 9.3 MB with two
   dex files. Signing is a later phase.
-- **No application unit tests exist yet.** The generated app has no logic of its own, so no test was generated: an
+- **The default project has no application unit test.** It has no logic of its own, so no test was generated: an
   empty one would only make Gradle list a test. `test`, `testDebugUnitTest` and `testReleaseUnitTest` all pass with
-  `NO-SOURCE`, which verifies nothing about behaviour. Tests belong to the phases that generate real logic.
+  `NO-SOURCE`, which verifies nothing about behaviour. Tests belong to the phases that generate real logic: Phase 5.3
+  generates navigation tests for a project with a `ProjectSpec` (see "Generated navigation tests (Phase 5.3)").
 - **Lint: 0 errors, 4 warnings, left as known limitations and not suppressed** (same for debug and release):
   1. `OldTargetApi`: `targetSdk = 36` is not the latest API level (the config allows 37; 36 is what Google Play requires
      of new apps today, and was a deliberate choice).
@@ -622,14 +624,106 @@ patch = render_patch(config, project_id="p1", run_id="r1", task_id="t1", spec=sp
   route argument, deep link, bottom bar or drawer. Navigation is forward buttons plus Back.
 - Routes are derived from names and cannot be chosen. At most 12 screens and 8 buttons per screen. English "Back" only.
 - Only the Kotlin + Compose template supports a spec; Java or XML combinations still refuse.
-- **Never run**: the generated apps were built, not launched. Runtime navigation behaviour (back stack, button wiring on a
-  device) and the Compose previews are untested.
-- No application unit tests are generated (as in 5.1); the release APK and AAB are unsigned.
+- **Run once, not widely**: the apps were built in Docker; the **three-screen sample** was also installed and driven on one
+  Android 17 (API 37.0) emulator (see "Phase 5.2 sample on an emulator"): navigation, Back, rotation and logcat passed there.
+  Other samples, other devices and API levels, dark mode and the Compose previews in an IDE were not run.
+- Phase 5.2 generated no unit test; Phase 5.3 adds navigation tests to a project with a spec (see below). The release APK
+  and AAB are unsigned.
 - The static review is silent when a route is computed, so a `Routes` constant that is removed by hand would make the
   route "computed" and unreported; the compiler (the Gradle build) is what catches that, and the sentinel tests use literal
   routes for the same reason.
 - `ProjectSpec` is not yet produced from anything: mapping a planner's output onto it, and `AndroidTarget` onto
   `ProjectConfig`, is future adapter work that depends on other owners.
+
+## Generated navigation tests (Phase 5.3)
+
+Until Phase 5.2 a generated project had no test: `gradle test` ran with `NO-SOURCE`. A project rendered **from a
+`ProjectSpec`** now also contains a real JVM test, `app/src/test/java/<package>/navigation/NavigationTest.kt`, generated
+from the spec, and the test-only dependencies it needs. Still deterministic and internal (no LLM, planner, worker, storage,
+contract, compatibility-matrix or Docker file was touched). **Without a spec the output is exactly the Phase 5.1 project**
+(the three pinned SHA-256 values still hold), so a project without screens has neither tests nor test dependencies.
+
+| Module | Role |
+|---|---|
+| `navtests.py` | `add_navigation_tests`: the test class, the catalog and `app/build.gradle.kts` additions; `navigation_tests_supported(config)` |
+| `renderer.py` | the registered `apply_spec` of the Kotlin + Compose template is now "the screens of the spec (5.2), then their navigation tests (5.3)" |
+| `screens.py` | `AppNavHost(modifier, navController = rememberNavController())` (new optional parameter, see below); `BACK_TEXT` |
+| `versions.py` | pins `junit`, `robolectric` and `robolectric_sdk`; `VERIFIED_BUILD` extended |
+
+### What the test checks (Robolectric + Compose test + the Navigation test helper)
+
+It composes the real `AppNavHost` in the app's theme with a `TestNavHostController` and, **for the spec it was generated
+from**:
+
+- the start screen is shown (`startsOn<Start>`), and the system Back on it leaves the app (`backOnTheStartScreenLeavesTheApp`);
+- every screen shows its title, its description when it has one, and **exactly its buttons**: the number of clickable nodes
+  and the number carrying each label are asserted, and the controller's route is the screen's `Routes` constant (`shows<Name>`
+  and the `assertOn<Name>` helper every other test ends with);
+- every button opens its target (`<from>Opens<To>`: one test per edge of the graph, reaching the source screen by the shortest
+  way from the start, found breadth-first in button order);
+- Back, the on-screen button and the system's, returns to the screen the button was pressed on (not to the start), and an edge
+  that leads back into the start screen is left with the system Back only (the start has no Back button).
+
+Texts are looked up through the string resources the screens use, never written into Kotlin. Two screens may share a title
+and a screen may itself be called "Back": the n-th button with equal text is clicked, in layout order (this is computed from the
+spec and checked by a simulator in the Python tests). Function names are unique (a number is appended if two would collide).
+
+### Dependencies (test-only, approved)
+
+| Library | Version | How |
+|---|---|---|
+| `org.robolectric:robolectric` | **4.18.1** (`TOOLCHAIN.robolectric`) | `testImplementation` |
+| `junit:junit` | **4.13.2** (`TOOLCHAIN.junit`) | `testImplementation` |
+| `androidx.navigation:navigation-testing` | **2.10.2** (shares `navigationCompose`, bumped together with Navigation Compose) | `testImplementation` |
+| `androidx.compose.ui:ui-test-junit4` | **1.13.0**, from the Compose BOM 2026.11.01 | `testImplementation` |
+| `androidx.compose.ui:ui-test-manifest` | **1.13.0**, from the Compose BOM | `debugImplementation` |
+
+Correction of the Phase 5.3 plan: it said the BOM does not manage the `ui-test-*` artifacts. It does (`compose-bom-2026.11.01.pom`
+lists `ui-test-junit4` and `ui-test-manifest` at 1.13.0), so they are declared like every other Compose library of the catalog,
+without a version, and resolve to exactly the approved 1.13.0. No existing pin changed.
+
+### What real builds changed (findings, in the order they appeared)
+
+1. **Robolectric 4.18.1 cannot simulate API 36 on JDK 17.** The first run failed with "Failed to create a Robolectric sandbox:
+   Android SDK 36 requires Java 21 (have Java 17)", because Robolectric runs the app's `targetSdk` (36). The generated project
+   builds on JDK 17 (AGP 9.5.1's minimum), so no version was changed; the test pins `@Config(sdk = [35])`, the highest level that
+   runs there (`TOOLCHAIN.robolectric_sdk`). A project whose **`minSdk` is above 35** cannot run it at all (a real run with
+   minSdk 36 failed every test in `ShadowPackageParser`); such a project is rendered **without** the test and the test
+   dependencies (`navigation_tests_supported`), not with tests that fail.
+2. **The release unit-test task cannot run the tests.** `debugImplementation(ui-test-manifest)` is what registers the
+   `ComponentActivity` that a Compose test launches; `testDebugUnitTest` passed (7 of 7 on the three-screen sample) and
+   `testReleaseUnitTest` failed 7 of 7 with "Unable to resolve activity". Declaring the library as `testImplementation`
+   instead failed both variants (the manifests of test-classpath libraries are not merged), and `releaseImplementation` would
+   put it in the release APK. The release task has to stay registered (AGP 9.5.1 needs release unit tests enabled to create the
+   Compose Preview tasks, see 5.1), so `app/build.gradle.kts` **skips that one task by name**
+   (`enabled = name != "testReleaseUnitTest"`): `gradle test` runs the debug tests and reports the release task as SKIPPED. A
+   check after the change: `tasks --all` and the release Compose Preview run-files task still pass.
+3. **`createAndroidComposeRule` is deprecated in Compose 1.13.0** (a Kotlin warning); the test uses the `v2` package
+   (`androidx.compose.ui.test.junit4.v2`), whose rule runs coroutines on a `StandardTestDispatcher`.
+4. **`AppNavHost` takes an optional controller.** The test needs the controller to read the current route, so the generated host
+   is `AppNavHost(modifier, navController: NavHostController = rememberNavController())`. `MainActivity` is byte-identical and
+   still calls `AppNavHost()`. The static navigation rules still see every route, the start destination and every `navigate`
+   target (`dynamic = False`).
+5. **The test uses a tall screen** (`@Config(qualifiers = "w411dp-h914dp")`) because the generated screens are a plain
+   `Column` that does not scroll; see the limitation below.
+6. The first `gradle test` downloads Robolectric's instrumented Android jar for API 35 (about 207 MB) from Maven Central.
+
+### Limitations
+
+- **Behaviour is checked on one simulated Android level** (API 35, by Robolectric on JDK 17), at one screen size, in the light
+  theme. It is a JVM simulation, not a device: `Robolectric` is not the emulator run described under "Phase 5.2 sample on an
+  emulator", and nothing here covers gestures, animations, the real window manager or other API levels.
+- A project with `minSdk` above 35 has no navigation tests (see finding 1). A project built on JDK 21 could run API 36, but the
+  generated build is JDK 17 and nothing here assumes otherwise.
+- **The generated screens do not scroll.** A screen with many buttons (up to 8, plus Back) most likely does not fit on a small
+  display or in landscape (the emulator run of Phase 5.2 used a three-screen sample on a tall display, so it did not test this);
+  the tests use a tall screen, because on Robolectric's default one 15 of the 40 tests of the 12-screen sample failed. A Phase 5.2
+  limitation that this phase found and did not change.
+- The release unit-test task is skipped (finding 2): the navigation tests do not run against the release variant.
+- The tests only know what the spec says. They do not test an app that has been edited afterwards, and they stay correct only
+  while `MainActivity`, `AppNavHost` and the screens keep the shape the generator wrote.
+- The instrumented (`androidTest`) form is not generated: it needs an emulator or device, which neither the build container nor a
+  CI runner without KVM has.
 
 ## Generation workflow, supported technologies, repair rules
 
@@ -1227,8 +1321,9 @@ no unit tests. The only warning in any log is "Unable to strip ... libandroidx.g
 All four: minSdk 24, targetSdk 36, compileSdk 37, launchable `MainActivity`, release APK not debuggable (debug APK
 debuggable), zipalign check OK, release APK and AAB **unsigned** (`apksigner` DOES NOT VERIFY, `jarsigner` finds no manifest).
 `twelve-full` shows the namespace and application ID apart: package `com.acme.NotesPro`, versionCode 3, versionName `2.1`,
-label `R&D Tracker`, launcher `org.acme.deep.pkg.MainActivity`. **Not verified**: any run on an emulator or device
-(navigation at runtime, the previews), signing, other SDK levels, the Gradle wrapper, any unit test (none exists).
+label `R&D Tracker`, launcher `org.acme.deep.pkg.MainActivity`. **Not verified when these builds were made**: any run on an
+emulator or device (navigation at runtime, the previews), signing, other SDK levels, the Gradle wrapper, any unit test (none
+existed). Afterwards the `three` sample was run on an emulator (next section) and Phase 5.3 added the navigation tests.
 
 What the 5.2 tests cover: valid and invalid screen names (case, digits, non-ASCII, separators, length, the `Screen` suffix),
 route and constant derivation, titles and descriptions (injection characters, bidi, double spaces, length, NFC), edges (unknown,
@@ -1238,6 +1333,112 @@ unique; button and `onBack` wiring; `Routes` as `const val`; every `navigate` ta
 review's own navigation facts; strings (what is used is defined and nothing else, escaped, parse-back); determinism; the patch
 limits; refusal of a template without spec support, of a missing base file and of a screen overwriting a file; `PatchSet`
 preview, byte-for-byte apply, rollback, refusal over an existing project, checkpoint and `review_patch`.
+
+### Phase 5.2 sample on an emulator (runtime check, 2026-11-20)
+
+Phase 5.2's builds were never run until the user approved installing and driving the three-screen sample on their running
+emulator (replacing the earlier `com.example.notes` install). No repository file was changed for it.
+
+| | |
+|---|---|
+| Device | `emulator-5554`, AVD `Medium_Phone_API_37.0`, Android 17 (API 37.0), x86_64, 1080 x 2400 |
+| App | the Docker-built **debug APK of the Phase 5.2 `three` sample** (13,332,559 B, SHA-256 `ea72b96a05a81f69bce875da301235c14cabf0e12022dac8d76eb15bfa1aa187`), i.e. the build listed above, **not** the Phase 5.3 one (it differs only by `AppNavHost`'s optional parameter); installed with `adb install -r`, launched in 2.5 s |
+| Result | **20 of 20 checks passed** |
+
+Checked on the device (each with a screenshot and a UI-hierarchy dump): Home shows both buttons and no Back; Settings shows
+its button and Back; About shows its text and Back; the in-app Back and the system Back each return one screen; Home to About
+directly and Back returns to **Home**, not to Settings; Home, Settings, About and the system Back twice returns to Settings and
+then Home; rotating to landscape keeps Settings, About is reachable in landscape, and rotating back keeps About; the system Back
+on Home leaves the app; relaunching starts at Home. Logcat (25,307 lines, 354 about the app): no `FATAL EXCEPTION`, no
+`AndroidRuntime` error, no ANR, no process death, no native crash. Its one error-level line that mentions the app is
+`system_server` (`WindowOrganizerController`: "Attempting to externally change a non-organized container") logged while the
+task was closed after Back on Home; it is the platform's, not the app's. The rotation settings were restored afterwards.
+
+**Not covered**: dark mode, the Compose previews in an IDE, other samples, other devices and API levels, an install of a signed
+build. The debug key is Docker's, so Android Studio's own install of the same package needs an uninstall first.
+
+### Phase 5.3 verification (generated navigation tests; `p3/phase5-nav-tests`, based on `p3/phase5-screens` at `f6c07c0`)
+
+| Check | Result |
+|---|---|
+| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen` | 1824 passed, 5 skipped, 1 xfailed (the 1689 / 5 / 1 of `f6c07c0` plus 135 new tests) |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4), same suite from a fresh export of the working tree | 1828 passed, 1 skipped, 1 xfailed (the 1693 / 1 / 1 of `f6c07c0` plus 135) |
+| `ruff check`, `ruff format --check`, `compileall` | clean on both platforms |
+| New tests | 135, all in `test_templates_navtests.py`; 7 existing tests of `test_templates_screens.py` were updated for the new file set (counts, the test path, and the two build files, which are no longer in the "byte-identical" list because the new tests pin exactly what was added to them) |
+| Phase 5.1 and 5.2 preserved | all their tests pass; without a spec the output hashes of the three 5.1 configs are unchanged; with a spec only `AppNavHost.kt`, `strings.xml`, the catalog, `app/build.gradle.kts` and the new test differ from 5.2 (a test lists them) |
+| Mutation testing of the new code (Python) | **76 of 76 caught** (dependency lines, versions and configurations, the release skip, the class text, button order and occurrence counting, the way into screens, test names, the support check, the refusals, the layer order). The first run caught 73: it found that no test pinned breadth-first against depth-first search (a spec with a shortcut was added), none covered a test name colliding with a helper's, and none the order of the two generator layers; and one mutant (a missing `seen` check) made the generator loop forever, so it hung for 17 minutes until stopped. The harness now has a 180 s limit, under which that mutant is reported as a hang (detected, but only as a timeout: the loop cannot be asserted from inside a test) |
+| Mutation testing of the generated app (Kotlin, in Docker) | **14 of 14 caught**, none by a compile error (below) |
+| Static review of generated projects | no finding for 9 specs (1, 3, 4 keyword-named, 12 screens, a cycle with a chosen start, equal titles with a screen called "Back", colliding function names, a helper-name collision, a shortcut graph) x 3 configs, and none in the four built samples (`review_patch` before they were applied); a broken test file is caught (`syntax.unbalanced_brackets`) |
+| **Gradle builds of the four samples** | **all 28 commands exit 0**; the navigation tests pass on the debug unit-test task (below) |
+
+**Gradle builds (Docker, 2026-11-20, same image and volumes as 5.1 and 5.2).** JDK 17 (Temurin 17.0.21), system Gradle 9.6.0,
+AGP 9.5.1, Kotlin 2.4.21, Compose BOM 2026.11.01, SDK platform 37.1, build-tools 36.0.0, plus (new) Robolectric 4.18.1, JUnit
+4.13.2, navigation-testing 2.10.2 and the BOM's ui-test 1.13.0. Each sample was rendered through `PatchEngine` (after
+`review_patch`), copied into the container and built with `G` = `gradle --no-daemon --console=plain --stacktrace
+--warning-mode all`. The tree renders exactly the files that were built (byte-identical; the SHA-256 values are pinned in a test).
+
+| Sample | Files | `G build` | Navigation tests (`testDebugUnitTest`) |
+|---|---|---|---|
+| `one` (1 screen) | 20 | 110 tasks, 1m26s | 2 passed |
+| `three` (the 5.2 sample, `Home` to `Settings` and `About`, `Settings` to `About`) | 22 | 110 tasks, 1m39s (from a clean directory) | 7 passed |
+| `keywords` (`Class`, `Object`, `Fun`, `Val`) | 23 | 110 tasks, 1m28s | 8 passed |
+| `twelve-full` (12 screens, 8 buttons on the first, other package, application ID, name and version) | 31 | 110 tasks, 1m45s | 40 passed |
+
+For every sample, each of these exited 0: `G build` (which runs the debug tests), `G tasks --all`, `G assembleRelease`,
+`G bundleRelease`, `G lint`, `G :app:lintRelease` and `G :app:testDebugUnitTest --rerun :app:testReleaseUnitTest --rerun`
+(`testReleaseUnitTest` is SKIPPED, see finding 2). **Lint: 0 errors and the same four warnings as before, on every sample**
+(the test code and its dependencies add none). The only warning in any log is "Unable to strip ... libandroidx.graphics.path.so"
+(no NDK in the image). Unit-test results: 0 failures, 0 errors, 0 skipped tests in each debug run.
+
+| Sample | Release APK (unsigned) | Release AAB (unsigned) | Debug APK |
+|---|---|---|---|
+| `one` | 9,340,694 B, `9680c000cfe0bc20d6c332c513779c71cdc91f6e484d9c8c6b00ebcd3d36714d` | 8,959,635 B, `23aa207c219c7f5c2c2f94268c8e950e344842e6b9a511394239c6d1031c12b4` | 13,314,378 B |
+| `three` | 9,342,734 B, `b043b108d223274f5b6b4e52fd400e5ae24b8ba3d2e32e7cec87af9995acf5e7` | 8,967,736 B, `e49bd4e2e98a6aeb73b3403a16851c322c53dba7129c6c8acec8d7c88de9ff20` | 13,332,802 B |
+| `keywords` | 9,358,670 B, `65665a7c2432c04c57cdffe62e4c6ed4676a015200d36420d5786ac65c719b06` | 8,969,583 B, `5922b1f29eeed449e75b80938a18312ab480b7c58887187b45c6ac0cdea481a1` | 13,332,358 B |
+| `twelve-full` | 9,378,298 B, `311e9576b3a005b70e5fcdf5acc62ed1e40f0be643c0bfd89817aca6be6892a8` | 8,992,587 B, `b2445836bb96e0a778723f5eed825a08799fb3a409ae3286b72d2abe60571f2d` | 13,368,362 B |
+
+All four: minSdk 24, targetSdk 36, compileSdk 37, launchable `MainActivity`, release APK not debuggable (debug APK debuggable),
+zipalign OK, release APK and AAB **unsigned** (`apksigner` DOES NOT VERIFY, `jarsigner` finds no manifest). **No test library
+reaches a release output**: the release APK has no Robolectric, JUnit, navigation-testing or Compose-test class and no
+`ComponentActivity` in its manifest; only the **debug APK** carries `ui-test-manifest`'s extra activity. A comparison of the `three`
+sample with and without the test file and dependencies (both built from clean): the **release APKs are byte-identical**
+(same SHA-256); the two AABs contain the same 128 entries with identical names, sizes and CRC-32 values but list some
+`META-INF/*.version` entries in a different order, so their hashes differ (an AAB is reproducible for one project: two clean
+rebuilds gave one hash). The sizes of the release APKs equal those of Phase 5.2 for every sample, while their hashes differ,
+because `AppNavHost`'s default parameter changes its bytecode.
+
+**Findings that changed the design** (details under "Generated navigation tests (Phase 5.3)"): (1) the first run failed with
+"Android SDK 36 requires Java 21 (have Java 17)", fixed without changing a version by pinning API 35 in the test; a project
+with `minSdk` 36 failed every test in `ShadowPackageParser` with that fix, so it gets no test; (2) `testReleaseUnitTest` failed 7
+of 7 ("Unable to resolve activity": `ui-test-manifest` is debug-only) while `testDebugUnitTest` passed, and
+`testImplementation(ui-test-manifest)` failed both, so the release task is skipped (checked afterwards: `tasks --all` and the
+release Compose Preview run-files task still pass); (3) `createAndroidComposeRule` is deprecated in Compose 1.13.0, so the `v2`
+rule is used; (4) the plan's note that the BOM does not manage `ui-test-*` was wrong, so they are declared without a version.
+
+**The tall test screen is needed.** With Robolectric's default (small) screen, the 12-screen sample fails 15 of its 40 tests
+(for example "expected:<step8> but was:<step0>": after the click, the app was still on the first screen). The likely cause, not
+inspected further, is that the first screen's 8 buttons and title do not fit and the generated screens are a plain `Column` that
+does not scroll. The tests therefore run at 411 x 914 dp. If that is the cause, it is a limitation of the 5.2 screens (small phone
+or landscape) that 5.3 found and left alone.
+
+**Mutation testing of the generated app (Kotlin, Docker).** Fourteen deliberate breakages of the generated three-screen app
+were each applied to a copy and `testDebugUnitTest` run: the unmodified copy passes 7 of 7; **all 14 mutants made tests fail,
+none by a compile error** (the failing tests are named in the log), and the restored copy passes 7 of 7 again. They are: Home opens the
+wrong screen; Settings opens Home instead of About; Settings' Back not wired; About's Back pushes Home; About's Back pops to Home;
+Settings' Back pops twice; the start destination is Settings; the About destination is registered under another route; Settings'
+Back button opens About; Settings swallows the system Back; Settings has an extra button; Home lost its About button; Home lost
+its description; About shows another screen's title.
+
+What the Python tests cover (new): the five dependencies and their versions in the catalog and the build file, and nowhere else;
+that no test library can reach a release build; the skip of the release task; the test's path, package, runner, SDK, rule and
+theme; that no text is written into Kotlin (resource ids only); a well-formed class for nine specs (imports sorted and used,
+brackets, line length, unique valid function names); one test per start, back and screen and per edge; the way into each screen
+being a shortest one; equal texts, a screen called "Back", an edge into the start screen and colliding names; **a simulator that
+runs the generated script against a model of the app built independently from the spec** (it passes on the model and fails when a
+button opens the wrong screen, Back does nothing, Back goes to the start or the system Back does nothing); the unsupported minimum
+SDK; refusals when an anchor is missing, repeated or a file is absent; that the screens are applied before the tests are added;
+`AppNavHost`'s signature and `MainActivity` unchanged; the review's navigation facts; determinism; the patch limits; and the pins
+of the four built projects.
 
 ### Platform coverage (Windows and Linux together)
 
@@ -1483,8 +1684,8 @@ Phase 4b-2c (authentication):
 Phase 5.1 (project templates): see "Project templates (Phase 5.1)" above. In short: the default project's debug build,
 release build, AAB, `lint` (0 errors, 4 warnings) and `tasks --all` pass with Gradle, after two failures that changed
 the template (compileSdk 37.0 needed API 37.1; AGP's Compose Preview tasks needed Android resources and unit tests
-enabled for every variant). The release APK and AAB are **unsigned**; **no application unit tests exist yet**; the four
-lint warnings are known limitations; only the default configuration was built (no emulator, no other package or SDK
+enabled for every variant). The release APK and AAB are **unsigned**; **the default project has no application unit
+test**; the four lint warnings are known limitations; only the default configuration was built (no emulator, no other package or SDK
 level, no Gradle wrapper); there is one template (Kotlin + Compose, one module); the wrapper jar and scripts are not
 generated; and two kinds of breakage in a generated project are not caught by the review (they are covered by the
 template tests instead).
@@ -1492,9 +1693,16 @@ template tests instead).
 Phase 5.2 (multi-screen projects): see "Multi-screen projects from a `ProjectSpec`" above. In short: the screens are
 static (title, description, buttons; no state, input or arguments), at most 12 screens and 8 buttons each, routes are
 derived and not chosen, and only the Kotlin + Compose template supports a spec. Four sample specs built with the same
-Gradle commands as 5.1, but **no generated app was ever run** (no emulator or device), so runtime navigation and the
-previews are untested; the outputs are unsigned and there are no unit tests. The static review cannot see a removed
+Gradle commands as 5.1; the three-screen sample was run **once, on one Android 17 emulator** (navigation, Back, rotation,
+logcat), the other samples and the previews were not run; the outputs are unsigned. The static review cannot see a removed
 `Routes` constant (the route becomes "computed"); the Gradle build catches that. Nothing consumes a `ProjectSpec` yet.
+
+Phase 5.3 (generated navigation tests): see "Generated navigation tests (Phase 5.3)" above. In short: a project with a spec
+gets a Robolectric + Compose-test `NavigationTest` and five test-only dependencies; it passes on the debug unit-test task of
+four sample specs and fails when the generated navigation is broken. It simulates **API 35 on JDK 17** (Robolectric 4.18.1
+needs Java 21 for API 36), so a project with `minSdk` above 35 gets no test; the **release unit-test task is skipped**
+(`ui-test-manifest` is debug-only); the generated screens do not scroll, which the tall test screen hides; there is no
+instrumented test; the default project (no spec) is unchanged and has no test.
 
 ## Unfinished integration work
 
@@ -1503,8 +1711,9 @@ Not done:
 - **Phase 4b-3** (API-use and null-safety rules).
 - **More builds of the Phase 5.1 and 5.2 templates.** Debug, release, bundle, `lint` and `tasks --all` of the default
   project (5.1) and of four sample specs (5.2) were run (in a temporary Docker image kept outside the repository). Still to
-  do: signing the release outputs, an emulator or device run (the only way to test runtime navigation and the previews),
-  other SDK levels, a build with the Gradle wrapper, and application unit tests once generated code has logic to test. That belongs in the `android-build` image, which needs a JDK and the
+  do: signing the release outputs, more emulator or device runs (only the three-screen sample ran, once; the previews never),
+  other SDK levels, a build with the Gradle wrapper, instrumented tests (they need an emulator), and unit tests for logic
+  beyond navigation once generated code has some. That belongs in the `android-build` image, which needs a JDK and the
   Android SDK (platform 37.1, build-tools 36.0.0, ideally the NDK): Person 4's environment.
 - **Producing a `ProjectSpec`.** Nothing builds one yet. Mapping a planner's output (`ImplementationPlan`, whose shape is
   Person 2's) onto it, and the contracts' `AndroidTarget` onto `ProjectConfig`, is adapter work that waits for the v0.2
