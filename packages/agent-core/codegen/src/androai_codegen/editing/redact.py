@@ -8,6 +8,7 @@ otherwise ordinary files.
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 REDACTION_MARKER = "[REDACTED]"
 
@@ -52,3 +53,55 @@ def mask_secrets(text: str) -> str:
 
 def count_redaction_markers(text: str) -> int:
     return text.count(REDACTION_MARKER)
+
+
+# One label per entry of ``_TOKEN_PATTERNS``, in the same order.
+_TOKEN_KINDS = (
+    "aws_access_key",
+    "github_token",
+    "google_api_key",
+    "slack_token",
+    "openai_style_key",
+    "jwt",
+)
+if len(_TOKEN_KINDS) != len(_TOKEN_PATTERNS):  # pragma: no cover - a maintenance guard
+    raise RuntimeError("_TOKEN_KINDS must label every entry of _TOKEN_PATTERNS")
+
+
+class SecretMatch(NamedTuple):
+    """Where a likely secret sits in a text. Never carries the secret itself."""
+
+    kind: str
+    start: int
+    end: int
+    length: int  # length of the secret value (for a private key, of the whole block)
+
+
+def find_secrets(text: str) -> list[SecretMatch]:
+    """Where :func:`mask_secrets` would mask, with the kind and length of each value.
+
+    It uses the same patterns, so detection and masking cannot drift apart. Overlapping matches
+    are reported once, under the first (most specific) kind: private key, then a known token
+    format, then a credential assignment. A value that is already the redaction marker is not a
+    finding.
+    """
+    found: list[SecretMatch] = []
+
+    def add(kind: str, start: int, end: int, length: int) -> None:
+        if all(end <= other.start or start >= other.end for other in found):
+            found.append(SecretMatch(kind, start, end, length))
+
+    for match in _PRIVATE_KEY.finditer(text):
+        add("private_key", match.start(), match.end(), match.end() - match.start())
+    for kind, pattern in zip(_TOKEN_KINDS, _TOKEN_PATTERNS, strict=True):
+        for match in pattern.finditer(text):
+            add(kind, match.start(), match.end(), match.end() - match.start())
+    for match in _KEY_VALUE.finditer(text):
+        if match["value"] != REDACTION_MARKER:
+            add(
+                "credential_assignment",
+                match.start("value"),
+                match.end("value"),
+                len(match["value"]),
+            )
+    return sorted(found, key=lambda item: item.start)

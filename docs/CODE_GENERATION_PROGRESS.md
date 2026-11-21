@@ -10,7 +10,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
 | 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c done** (authentication: 8 new rule ids, 65 tests, 94 of 94 mutations caught; nothing reported on the five real projects unfaulted, 25 of 33 authentication faults injected into them caught, the other 8 silent because the build is not readable enough). **Target SDK resolution done** (a follow-up: `targetSdk` is now also read from a version-catalog entry or a `buildSrc` constant, so the rules that depend on it engage on `iosched` and `sunflower`; 121 tests, 27 of 27 mutations caught, no new finding on the five real projects, 101 of 121 injected faults caught, up from 96). **4b-3 (API use, null safety) not started**. |
 | 5 | New project generation | **In progress. 5.1 done (branch `p3/phase5-templates`, draft PR): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Build-verified for the default template configuration only** (Docker, 2026-11-20, AGP 9.5.1, Gradle 9.6.0, Kotlin 2.4.21, Compose BOM 2026.11.01, compileSdk 37.1): debug APK, release APK and AAB (both **unsigned**), `build`, `lint` (0 errors, 4 warnings, left as known limitations) and `tasks --all` pass. **The default project (no spec) has no application unit test** (`test` passes with nothing to run), no signing, no other configuration, no Gradle wrapper. **5.2 done (branch `p3/phase5-screens`, pushed, stacked on 5.1): multi-screen projects from a structured `ProjectSpec`** (deterministic, no LLM), build-verified on four sample specs with the same Gradle commands (see "Phase 5.2"); the three-screen sample was also **run once on an Android 17 emulator** (navigation, Back, rotation, logcat; see "Phase 5.2 sample on an emulator"). **5.3 done (branch `p3/phase5-nav-tests`, pushed, draft PR #4): generated navigation tests** for projects with a spec (Robolectric + Compose test, test-only dependencies; see "Generated navigation tests (Phase 5.3)"): the unit tests pass on the four sample specs and fail when the generated navigation is broken (mutation-checked); they simulate API 35 on JDK 17, and no instrumented test exists. **5.4 done locally (branch `p3/phase5-scroll-signing`, not pushed): scrolling screens** (an 8-button screen was unreachable in landscape on an emulator before, reachable after), the tall-screen workaround and the release-test skip removed (the tests pass on the debug and the release task), signing investigated with a throwaway key (see "Scrolling screens, release tests and signing (Phase 5.4)"); Compose previews not verified. Prompt-driven generation, planning and the worker are not started |
-| 6 | Existing project modification | Not started |
+| 6 | Existing project modification | **In progress. Stage 6A (read-only audit and proposal) approved. M1a done locally (branch `p3/phase6a-ingest`, based on `p3/phase6-1-android-target-mapper` at `db49e2c`, not committed): importing a local directory or a ZIP archive into an isolated workspace**, with limits enforced on the data actually read, path and link validation, secret detection, licence and source records, an ownership or permission attestation, and proof that the source is unchanged (see "Project import (Phase 6, M1a)"). Not started: GitHub import (M1b), project analysis, inventory, context retrieval, any LLM, patch generation, approval checks beyond the review engine's, build validation |
 | 7 | Self-healing repair | Not started |
 | 8 | Visual editor source mapping | Not started |
 
@@ -828,6 +828,138 @@ The new tests cover valid mappings (nine SDK combinations, enum members, determi
 name, Java and XML (alone and together), unknown values, the floor (21, 22, 23 refused, 24 accepted), the target boundaries (below
 min, 37 accepted, 38 refused), integer-only levels, every problem reported at once and in order, the error's type and text, a target
 without the attributes, a defensive `ProjectConfig` error path, and the real `AndroidTarget`.
+
+## Project import (Phase 6, M1a)
+
+`androai_codegen.ingest` imports an existing Android project, from a **local directory or a ZIP archive**, into a new isolated
+workspace that the patch engine can edit. It is the first stage of the "modify an existing project" work (the proposal is in
+`AndroAI-Phase6A-Modification-Proposal.md`, kept outside the repository). It reads and copies files. It does **not** analyse the
+project, call an LLM, import from GitHub, build anything or execute anything from the source.
+
+```python
+from androai_codegen.ingest import OwnershipAttestation, import_local_directory, import_zip, reopen_import
+
+attestation = OwnershipAttestation(basis="own", statement="I wrote this app.", attested_by="user-1")
+result = import_zip("MyApp-main.zip", data_root=root, tenant_id="t1", project_id="p1", attestation=attestation)
+# or: import_local_directory(path, ...)
+engine = result.open_engine()          # a PatchEngine bound to the copy, with secret-bearing files protected
+result.report                          # what was imported, skipped, found (see below); also written to disk
+reopen_import(result.project_dir)      # later: reopen from the report (refuses a project that is not eligible)
+```
+
+### Layout and atomicity
+
+```
+<data_root>/<tenant_id>/<project_id>/
+    workspace/                        the project: what the patch engine edits
+    journal/                          the engine's journal (never inside the workspace)
+    imports/<import_id>/report.json
+```
+
+An import is built in `<data_root>/.staging-<import_id>` and moved into place with one rename after every check has passed. A
+refused, failed or interrupted import (including `KeyboardInterrupt`) leaves no project, no staging directory and no new tenant
+directory; an existing project is never replaced (`project_exists`). `tenant_id` and `project_id` are validated identifiers
+(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, and not a reserved device name such as `CON`); they are never derived from a path. The data
+root must already exist (a mistyped root is never created). On POSIX the project directory is `0700`.
+
+### Rules and where they are tested
+
+| Rule | Behaviour |
+|---|---|
+| Ownership or permission | `ImportRequest.attestation` is **required** (`own` or `explicit_permission`, with a statement and who made it); without it the request cannot be built. It is recorded in the report together with `eligible_for_modification`, and `reopen_import` refuses a report that is not eligible. The attestation is the caller's statement; nothing here verifies who the caller is. |
+| Source never changed | The directory is only read (files are opened read-only, nothing is created in it). After copying, the source is walked again and compared (names, kinds, sizes, modification times) and every file is read again and compared with the bytes that were copied; a ZIP is hashed before and after. Any difference refuses the import (`source_changed_during_import`). Tests compare a full digest (names, modes, sizes, times, content hashes) before and after, including read-only files and refused imports. |
+| Limits on actual data | Files, total bytes, bytes per file, directory depth (path segments), expansion ratio (per entry and for the whole archive) and time are enforced **while reading**: the stream is cut off at the limit, the offending chunk is never written, and the archive's own claims (entry sizes, compressed sizes, counts) are never trusted. Claims are only used to refuse early. Ratio is judged only above `ratio_floor_bytes` (1 MiB) because small text compresses very well. |
+| Names | Absolute paths (`/x`, `C:\x`, `\\server\share`, `C:x`), `..`, backslashes, empty and `.` segments, control characters and NUL are refused with their own codes, **before** anything is written, and before an excluded name (such as `.git/../../x`) can hide them. The patch engine's own name rules then apply (Windows device names, trailing dots and spaces, `:`, `GIT~1`); depth and path length are limits. Names that would collide on a case-insensitive or normalising file system (`Foo.kt`/`foo.kt`, the same accented name composed two ways), duplicate entries, and a name used as both file and directory are refused. |
+| Links | Never created in the workspace. An **unsafe** link (absolute, drive-lettered, or leading outside the project, including through `..`) refuses the whole import; a **safe** link inside the project is skipped and reported; `SymlinkPolicy.REJECT_ALL` refuses any link, including a link as the source path. Windows junctions are detected by their reparse tag. A file written "through" a link entry is refused with the link. |
+| Special files | Devices, pipes and sockets (in a directory, or by their mode in a ZIP) are refused. Encrypted ZIP entries and unsupported compression methods are refused. |
+| Nested archives | A `.zip`, `.jar`, `.aar` ... inside the project is kept as an ordinary file, **never opened or extracted**, and listed in the report. |
+| Left out | `.git` (any case), `.gradle`, `.idea`, `node_modules`, `.cxx`, `.externalNativeBuild`, `__MACOSX`, `.DS_Store`, `Thumbs.db`, and `build` where it is a Gradle output directory (at the project root, or beside a `build.gradle[.kts]`). A source package named `build` is kept. Counted exactly in the report; listed up to 200 entries. A GitHub-style single wrapping folder is stripped (`strip_single_root`). |
+| Android project | A Gradle build file at the root and an `AndroidManifest.xml` somewhere, else `not_an_android_project` (so the wrong folder is caught). This is a structural check, not analysis; `require_android_project=False` turns it off. |
+| Nothing executes | The package imports no `subprocess`, `multiprocessing`, `ctypes`, `runpy`, `importlib` or `pickle` and calls no `eval`/`exec`/`compile`/`os.system`/`os.popen`/`os.exec*`/`os.spawn*` (an AST test enforces it), and a test imports projects full of scripts while every process-starting function is replaced by one that fails. Imported files are not marked executable. |
+| Untrusted text | Archive entry names and link targets reach messages only escaped and truncated; the report never contains a local path (the source is named by a label, default its folder or file name). |
+
+### Limits (all configurable through `IngestLimits`)
+
+| Limit | Default (approved) |
+|---|---|
+| `max_files` (files, and separately directories) | 20,000 |
+| `max_total_bytes` | 500 MiB (524,288,000) |
+| `max_file_bytes` | 50 MiB |
+| `max_depth` (path segments) | 64 |
+| `max_compression_ratio` | 100:1 (above `ratio_floor_bytes` = 1 MiB) |
+| `max_path_length` | 240 characters (Windows paths of 260+ characters are refused anyway) |
+| `max_seconds` | 600 |
+| `secret_scan_max_bytes` | 2 MiB |
+
+### Secrets
+
+`editing.redact.find_secrets` (new, additive) reports where `mask_secrets` would mask, with a kind and a length and **never the
+value**; it uses the same patterns, so detection and masking cannot drift apart (a test compares them). Every imported file is
+scanned (binary files and files over `secret_scan_max_bytes` are not, and are counted). A finding is a path, kind, line and length;
+the report holds at most 1,000 findings but exact totals, and a test checks that no secret value appears anywhere in it. The importer
+never alters an imported file. What a finding does to the file is decided by what the file is:
+
+* Protected (never shown to an LLM, never modified), through an `ImportProtection` policy (the default patterns plus the exact files
+  found, case-insensitively, rebuilt from the report by `reopen_import`): `google-services.json`; any configuration file
+  (`.properties`, `.json`, `.yml`, `.yaml`, `.ini`, `.cfg`, `.conf`, `.env`) containing a likely secret; any file containing a
+  private key. Keystores, `.env`, `local.properties` and the like are protected by the default policy and listed as `protected_file`.
+* Not protected: a source or resource file that merely contains a secret (a manifest with a Maps key, a Kotlin file with an API key).
+  Protecting these would make ordinary manifests and `strings.xml` files impossible to change. Their secrets are masked whenever the
+  file is shown to an LLM (`read_for_llm`), and a patch that writes the redaction marker is refused (both existing behaviour).
+* Reporting only: in code files (`.kt`, `.kts`, `.java`, `.gradle`) a credential-like name next to something that is not a quoted
+  literal (`val password: String`, `val secret = other`) is not reported, because the redaction pattern also matches types and
+  references. Masking is unaffected.
+
+### Licence and source records
+
+`report.licence` lists the licence files found at the root or one folder down (MIT, Apache-2.0, BSD-2/3-Clause, ISC, Unlicense,
+CC0, MPL-2.0, EPL, LGPL, GPL, AGPL are recognised by their text), the SPDX identifiers in `SPDX-License-Identifier` headers (first
+2 KiB of source files, `OR`/`AND`/`WITH` expressions split), and the most restrictive class (`strong_copyleft`, `weak_copyleft`,
+`unknown`, `permissive`, `none`) with notes. It is **recorded, never decisive**: a copyleft or missing licence does not block a
+confirmed import, and the notes say it is a heuristic and not legal advice. `report.source` records the kind, a label and a
+fingerprint (the archive's SHA-256, or the imported tree's); `content_fingerprint` hashes the imported paths, sizes and file hashes,
+so a ZIP and a directory with the same content have the same value.
+
+### Known limitations (M1a)
+
+* **Not implemented:** GitHub import (M1b) and private repositories; archives other than ZIP (tar, 7z, rar); any analysis of the
+  project (nothing parses the code; the report does not describe the app); a baseline checkpoint at import (the checkpoint manager
+  records it lazily at the first AI write, so edits made in between are part of that baseline).
+* The standard library loads a ZIP's whole central directory before the entry count can be checked. The count read from the
+  end-of-central-directory record is an advisory early refusal (a forged count only bypasses it, and 65,535 or more entries is
+  reported as 0xFFFF), so an archive with millions of entries still costs memory before it is refused.
+* The directory import trusts the local file system. A file changed by another process during the import is detected (walk and
+  re-read) but not prevented, and a link swapped in between planning and opening is refused only where the OS has `O_NOFOLLOW`
+  (elsewhere the opened file must still be a regular file). Modification times of directories are not compared (NTFS reports them
+  lazily); file sizes and times are.
+* Links are never imported: a project that relies on a symbolic link loses it (it is reported). Permission bits, owners and times
+  are not preserved and nothing is marked executable (`gradlew` is a plain file: the build side must run `sh gradlew` or
+  `gradle wrapper`). Name collisions are refused on every file system, which is stricter than a case-sensitive one needs.
+* Excluded directories are not imported. A required file inside `.gradle/` or another excluded directory is lost. `Workspace.iter_files`
+  skips **every** directory named `build`, even a source package (existing behaviour), so such a package, which the importer keeps,
+  is invisible to the engine's listing and to review.
+* Secret detection is heuristic and over-masks; unknown formats are missed; binaries and files over 2 MiB are not scanned (listed);
+  a hard-coded secret in a Kotlin or XML file is masked for an LLM but not protected, and a patch cannot edit the line that holds it.
+* Licence detection recognises well-known texts and SPDX headers only. Ownership is **not verified**: `eligible_for_modification`
+  rests on the caller's attestation, and the patch engine does not yet check it, so later stages must.
+* The Android check is shallow (a root build file and a manifest): a Flutter, Kotlin Multiplatform or monorepo layout with the
+  Android project in a subfolder is refused unless the check is turned off. Windows paths of 260 characters or more are refused.
+* The time limit is checked between chunks and files, so a single blocking read (for example on a network drive) can exceed it.
+  After a hard kill (power loss) a `.staging-*` directory can remain in the data root; it is safe to delete.
+* Two imports of the same project race at the final rename (one gets `project_exists`); there is no cross-process lock.
+
+### Phase 6 M1a verification (`p3/phase6a-ingest`, based on `p3/phase6-1-android-target-mapper` at `db49e2c`)
+
+| Check | Result |
+|---|---|
+| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen packages/contracts` | 2262 passed, 20 skipped, 1 xfailed. **362 new tests** (87 limits and names, 77 ZIP, 38 directory, 71 project/report/attestation/cleanup/no-execution, 89 secrets and licence). 15 of the 20 skips are in the new files: creating symbolic links, POSIX permissions and file types, case-sensitive names |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4, non-root), fresh export | 2281 passed, 1 skipped (NTFS junctions), 1 xfailed. **Nothing in the new files is skipped**: the symbolic link, pipe, unreadable file, `0700` and case-sensitive collision tests all ran |
+| `ruff check`, `ruff format --check` | clean on both platforms, on all 20 touched Python files |
+| Mutation testing of the import rules | **87 of 87 caught on Linux.** Mutants break one rule each: every limit and its default, the name rules, `..`, drive letters, links and their policy, special files, encrypted entries, collisions, root stripping, the source re-check and re-read, cleanup on interruption, the tenant-directory cleanup, directory mode, protection, secret classification, identifiers, the attestation, licence ranking, redaction overlap. On Windows the first run caught 79 of 88; of the 9 survivors, 5 were real test gaps (now caught), 3 need Linux features (caught there) and 1 only changed a message (removed) |
+| What the first runs found and changed | Directory modification times from `scandir` lag on NTFS, so comparing them reported "source changed" for an untouched project: a fresh `lstat` is used and directory times are no longer compared. The redaction pattern also matches `val password: String`: such unquoted matches in code files are no longer reported. `reopen_import` chose a report by directory name; it now takes the newest by recorded time. A test of the tenant-directory cleanup had patched the code it meant to test |
+| Imported workspace is faithful | a generated three-screen project imports from a directory and from a ZIP with the same content fingerprint, every file is byte-identical to the source, the review engine finds nothing blocking in the copy, and the patch engine edits the copy while the source stays byte-identical |
+
+The mutation harness is a throwaway script kept outside the repository.
 
 ## Generation workflow, supported technologies, repair rules
 
