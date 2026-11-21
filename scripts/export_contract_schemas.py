@@ -12,6 +12,7 @@ import androai_contracts as c
 MODELS = [
     c.AgentTask, c.AgentTaskStatus, c.CodingTask, c.CodingResult,
     c.BuildJob, c.BuildResult, c.TestJob, c.TestResult,
+    c.AppSpec, c.ValidationProblem,
 ]
 
 out = Path(__file__).resolve().parents[1] / "packages" / "contracts" / "schemas"
