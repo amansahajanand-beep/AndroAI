@@ -25,6 +25,13 @@ from .renderer import (
     template_placeholders,
 )
 from .spec import ProjectSpec, ScreenSpec, route_constant, route_of, validate_screen_name
+from .target import (
+    TargetLike,
+    TargetMapping,
+    TargetMappingError,
+    TargetProblem,
+    config_from_target,
+)
 from .validation import (
     validate_application_id,
     validate_display_text,
@@ -43,6 +50,10 @@ __all__ = [
     "ProjectSpec",
     "RenderedFile",
     "ScreenSpec",
+    "TargetLike",
+    "TargetMapping",
+    "TargetMappingError",
+    "TargetProblem",
     "Template",
     "TemplateError",
     "TemplateFile",
@@ -51,6 +62,7 @@ __all__ = [
     "UiToolkit",
     "UnsupportedTemplateError",
     "available_templates",
+    "config_from_target",
     "get_template",
     "navigation_tests_supported",
     "placeholder_values",

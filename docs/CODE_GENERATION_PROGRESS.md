@@ -780,6 +780,55 @@ in a repository or in a generated file.
 - The generated `app/build.gradle.kts` still says "no test exists yet" in a comment of the Phase 5.1 template, which is not true
   for a project with a spec (the comment is part of the byte-identical default project and was left alone).
 
+## Contract target to project config (Phase 6.1)
+
+The contracts' `AndroidTarget` (`language`, `ui`, `min_sdk`, `target_sdk`, `package_name`) says what a user wants; `ProjectConfig`
+is what the templates can build. `config_from_target(target, *, project_name)` in `templates/target.py` is the strict bridge: it
+returns a `TargetMapping(config, notes)` or raises a `TargetMappingError` that lists **every** problem as `(field, message)`.
+Deterministic, no LLM; no contract, orchestration or worker file was touched.
+
+**Boundaries.** `androai-codegen` does not depend on `androai-contracts` (its `pyproject.toml` lists pydantic and filelock only),
+and `TEAM_WORKFLOW.md` forbids codegen and orchestration importing each other. So the mapper imports neither: it reads any object
+that has the five attributes (a `TargetLike` protocol), which the real `AndroidTarget` is. The worker adapter (`workers/ai-agent`,
+which depends on the contracts) passes the contract object in as it is. A test checks that no template module imports the
+contracts or orchestration; tests that use the real model skip when `androai-contracts` is not installed.
+
+| Input | Behaviour |
+|---|---|
+| `project_name` | **Not part of `AndroidTarget`.** It is a required keyword argument; `None` or an invalid name is an error with the shared validator's exact message. Nothing is derived from the package name |
+| `language` | `kotlin` accepted. `java` is refused ("there is no java template, only 'kotlin' can be generated"); any other value is "unknown value" (no guessing, case-sensitive) |
+| `ui` | `compose` accepted. `xml` is refused the same way; an enum member is read by its value |
+| `package_name` | Checked by `validate_package_name`; the validator's exact message is reported |
+| `min_sdk` | An integer (a bool or a string is refused). **Below 24 is refused, not raised**: the contract allows 21, the pinned AndroidX libraries need 24, and raising it would change which devices can run the app |
+| `target_sdk` | An integer between `min_sdk` and **37** (the pinned compile SDK); otherwise refused. **Used as given, never replaced by the generator's default.** The contract's default is 35 and the generator's is 36: a target of 35 maps to 35 |
+| compile SDK, versions, application ID | Not taken from the target: the generator's pins and defaults |
+
+**Notes (never errors).** (1) If the target object says `target_sdk` was not set (a pydantic model that applied its default,
+`model_fields_set`), "the contract's default 35 is used, not the generator's default 36"; otherwise, if the target differs from 36,
+"used as given". (2) If `min_sdk` is above 35: "a project with a spec is generated without its navigation tests" (the Robolectric
+limit of Phase 5.3).
+
+**Limitations.** Kotlin + Compose only; the project name has to come from somewhere, and who supplies it is an open question
+for Person 2 (it is in the Phase 6.0 contract-decision document, which is not in the repository); `application_id`, `version_code`
+and `version_name` keep their defaults (the contract has no such fields); the mapper does not read `ImplementationPlan` or build a
+`ProjectSpec`; and it checks values, not the user's intent (a user who wanted 22 gets an error, not a suggestion).
+
+### Phase 6.1 verification (`p3/phase6-1-android-target-mapper`, based on `p3/phase5-scroll-signing` at `93854de`)
+
+| Check | Result |
+|---|---|
+| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen` | 1913 passed, 5 skipped, 1 xfailed (the 1832 / 5 / 1 of `93854de` plus 81 new tests) |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4), fresh export of the working tree | 1917 passed, 1 skipped, 1 xfailed (the 1836 / 1 / 1 plus 81) |
+| `ruff check`, `ruff format --check`, `compileall` | clean on both platforms |
+| Mutation testing of the mapper | **42 of 42 caught**. The first run caught 41: removing the mapper's own project-name check still passed, because `ProjectConfig` rejects the name later with a differently worded message; the tests now require the shared validator's exact message |
+| Static review of projects from mapped configs | no finding (three target shapes, with and without a spec) |
+| **Gradle, one project from the contract's defaults** (`AndroidTarget(package_name=...)` with the three-screen spec: minSdk 24, **targetSdk 35**, never built before) | **all 7 commands exit 0** (`build`, `tasks --all`, `assembleRelease`, `bundleRelease`, `lint`, `:app:lintRelease`, both unit-test tasks); the navigation tests pass on debug and release (7 of 7 each); lint 0 errors and 5 warnings (the same ids as for target 36, including "not targeting the latest versions"); the release APK reports minSdk 24 and targetSdk 35 |
+
+The new tests cover valid mappings (nine SDK combinations, enum members, determinism, immutability), the missing and invalid project
+name, Java and XML (alone and together), unknown values, the floor (21, 22, 23 refused, 24 accepted), the target boundaries (below
+min, 37 accepted, 38 refused), integer-only levels, every problem reported at once and in order, the error's type and text, a target
+without the attributes, a defensive `ProjectConfig` error path, and the real `AndroidTarget`.
+
 ## Generation workflow, supported technologies, repair rules
 
 **Mostly not implemented yet** (Phase 5.3 and later, 6-8). Phases 5.1 and 5.2 added the project templates and the
