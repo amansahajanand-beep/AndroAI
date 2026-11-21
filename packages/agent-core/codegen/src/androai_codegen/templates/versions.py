@@ -4,9 +4,10 @@ Every value below was read from an official source on 2026-11-20 (see ``SOURCES`
 ``VERIFIED_BUILD`` records the Gradle tasks that passed for the project generated from the default
 config and, separately (``spec_*``), for four projects generated from a ``ProjectSpec`` together
 with their generated navigation tests (Phase 5.3). **Only that was verified.** Not built or run:
-signing (the release APK and AAB are unsigned), an instrumented test or any run of these builds on
-a device by the code that renders them, other package names or SDK levels than the samples', the
-Gradle wrapper (system Gradle was used). The default project has no test (``test`` passes with
+signing (the release APK and AAB are unsigned; a recipe was tried with a throwaway key), an
+instrumented test or any run of these builds on a device by the code that renders them (the
+emulator runs are in the progress document), other package names or SDK levels than the samples',
+the Gradle wrapper (system Gradle was used). The default project has no test (``test`` passes with
 nothing to run); a project with a spec has the navigation tests.
 
 The first build, with ``compileSdk = 37``, failed in ``checkDebugAarMetadata``: the pinned Compose
@@ -22,8 +23,9 @@ Phase 5.3 added test-only libraries and found two limits with real runs. Robolec
 Java 21 to simulate API 36 (the app's target) and the build is JDK 17, so the generated test pins
 API 35 (``robolectric_sdk``) and a project whose ``minSdk`` is higher gets no test. And the
 ``ComponentActivity`` a Compose test launches comes from ``ui-test-manifest``, which only the debug
-variant can have, so the release unit-test task (which must stay registered for the Compose
-Preview) is skipped. Neither changed a pin.
+variant can have: Phase 5.3 skipped the release unit-test task for that reason, and Phase 5.4
+removed the skip by registering the activity in the test itself, so both variants run the test.
+Neither changed a pin.
 
 To change a version, change it here (and in ``docs/COMPATIBILITY_MATRIX.md`` once the team
 approves), then rebuild and update ``VERIFIED_BUILD``: a test fails while the two disagree. Nothing
@@ -135,9 +137,16 @@ VERIFIED_BUILD: dict[str, str | int | tuple[str, ...]] = {
         "lint",
         ":app:lintRelease",
         ":app:testDebugUnitTest --rerun",
+        ":app:testReleaseUnitTest --rerun",
     ),
-    "spec_tests": "generated NavigationTest passes on the debug unit-test task (2, 7, 8 and 40 "
-    "tests); the release unit-test task is skipped by design; lint 0 errors 4 warnings",
+    # Phase 5.4 rebuilt the four samples from clean directories with scrolling screens.
+    "spec_tests": "generated NavigationTest passes on the debug AND the release unit-test task (2, "
+    "7, 8 and 40 tests each) on Robolectric's default screen; lint 0 errors 5 warnings (the fifth "
+    "is the newer AGP 9.5.2 notice that appeared on 2026-11-21)",
+    "spec_scroll": "generated screens scroll vertically; the tests scroll to every button they tap",
+    "signing_investigation": "an optional signingConfig reading the git-ignored "
+    "keystore.properties was built with a throwaway key: apksigner verifies the APK, jarsigner "
+    "the AAB; the recipe is documented, not generated",
     "junit": "4.13.2",
     "robolectric": "4.18.1",
     "robolectric_sdk": 35,

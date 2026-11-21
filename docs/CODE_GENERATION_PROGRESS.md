@@ -9,7 +9,7 @@ Scope: `packages/agent-core/codegen` (library, `androai_codegen`) and `workers/a
 | 2 | Git checkpoints, manual vs AI change tracking | **Done, verified on Windows and Linux (WSL); not yet in CI** (see Verification) |
 | 3 | Contracts proposal for `CodingTask` / `CodingResult` | **Drafted, awaiting Persons 2 and 4**: [CODEGEN_CONTRACT_PROPOSAL.md](CODEGEN_CONTRACT_PROPOSAL.md). No contracts PR until both approve. |
 | 4 | Code review engine | **In progress. 4a done** (syntax, imports, duplicates, resources, patch review), verified on Windows and Linux (WSL) against synthetic fixtures and, on Windows, three real projects (`nowinandroid`: 0 findings, 9 of 9 injected faults caught; `AntennaPod`, Java/Groovy: 2 findings, 10 of 10; `iosched`, Hilt/Data Binding: 0 findings, 10 of 10). Phase 4a.5 added Gradle project-dependency modelling and a faster `ReviewSession`. **4b-1 done**: manifest, Gradle/dependency and change-aware rules plus review against a checkpoint (23 new rule ids; verified on Windows and Linux; 57 of 57 mutations caught; 38 of 43 faults injected into five real projects caught, the other 5 silent on purpose). Phase 4a.6 then fixed two false positives of the older rules that 4b-1's validation turned up (library-shipped resources, a class imported next to an icon property), and Phase 4a.7 the last two (`items(count = n)` and framework classes behind a wildcard import). **4b-2a done** (navigation graphs and deep links: 12 new rule ids, 59 tests, 114 of 114 mutations caught, 49 of 55 injected faults caught on five real projects, nothing reported on them unfaulted). **4b-2b done** (security: 13 new rule ids, 96 tests, 143 of 143 mutations caught; five real projects report one unconfirmed finding unfaulted, and 22 of 33 security faults injected into them are caught, the other 11 silent for reasons that were checked: mostly a target SDK that is not written as a number). **4b-2c done** (authentication: 8 new rule ids, 65 tests, 94 of 94 mutations caught; nothing reported on the five real projects unfaulted, 25 of 33 authentication faults injected into them caught, the other 8 silent because the build is not readable enough). **Target SDK resolution done** (a follow-up: `targetSdk` is now also read from a version-catalog entry or a `buildSrc` constant, so the rules that depend on it engage on `iosched` and `sunflower`; 121 tests, 27 of 27 mutations caught, no new finding on the five real projects, 101 of 121 injected faults caught, up from 96). **4b-3 (API use, null safety) not started**. |
-| 5 | New project generation | **In progress. 5.1 done (branch `p3/phase5-templates`, draft PR): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Build-verified for the default template configuration only** (Docker, 2026-11-20, AGP 9.5.1, Gradle 9.6.0, Kotlin 2.4.21, Compose BOM 2026.11.01, compileSdk 37.1): debug APK, release APK and AAB (both **unsigned**), `build`, `lint` (0 errors, 4 warnings, left as known limitations) and `tasks --all` pass. **The default project (no spec) has no application unit test** (`test` passes with nothing to run), no signing, no other configuration, no Gradle wrapper. **5.2 done (branch `p3/phase5-screens`, pushed, stacked on 5.1): multi-screen projects from a structured `ProjectSpec`** (deterministic, no LLM), build-verified on four sample specs with the same Gradle commands (see "Phase 5.2"); the three-screen sample was also **run once on an Android 17 emulator** (navigation, Back, rotation, logcat; see "Phase 5.2 sample on an emulator"). **5.3 done (local branch `p3/phase5-nav-tests`, not pushed): generated navigation tests** for projects with a spec (Robolectric + Compose test, test-only dependencies; see "Generated navigation tests (Phase 5.3)"): the debug unit tests pass on the four sample specs and fail when the generated navigation is broken (mutation-checked); they simulate API 35 on JDK 17, the release unit-test task is skipped, and no instrumented test exists. Prompt-driven generation, planning and the worker are not started |
+| 5 | New project generation | **In progress. 5.1 done (branch `p3/phase5-templates`, draft PR): Android project templates**, Kotlin + Jetpack Compose, rendered as a `PatchSet` (see "Project templates (Phase 5.1)"). **Build-verified for the default template configuration only** (Docker, 2026-11-20, AGP 9.5.1, Gradle 9.6.0, Kotlin 2.4.21, Compose BOM 2026.11.01, compileSdk 37.1): debug APK, release APK and AAB (both **unsigned**), `build`, `lint` (0 errors, 4 warnings, left as known limitations) and `tasks --all` pass. **The default project (no spec) has no application unit test** (`test` passes with nothing to run), no signing, no other configuration, no Gradle wrapper. **5.2 done (branch `p3/phase5-screens`, pushed, stacked on 5.1): multi-screen projects from a structured `ProjectSpec`** (deterministic, no LLM), build-verified on four sample specs with the same Gradle commands (see "Phase 5.2"); the three-screen sample was also **run once on an Android 17 emulator** (navigation, Back, rotation, logcat; see "Phase 5.2 sample on an emulator"). **5.3 done (branch `p3/phase5-nav-tests`, pushed, draft PR #4): generated navigation tests** for projects with a spec (Robolectric + Compose test, test-only dependencies; see "Generated navigation tests (Phase 5.3)"): the unit tests pass on the four sample specs and fail when the generated navigation is broken (mutation-checked); they simulate API 35 on JDK 17, and no instrumented test exists. **5.4 done locally (branch `p3/phase5-scroll-signing`, not pushed): scrolling screens** (an 8-button screen was unreachable in landscape on an emulator before, reachable after), the tall-screen workaround and the release-test skip removed (the tests pass on the debug and the release task), signing investigated with a throwaway key (see "Scrolling screens, release tests and signing (Phase 5.4)"); Compose previews not verified. Prompt-driven generation, planning and the worker are not started |
 | 6 | Existing project modification | Not started |
 | 7 | Self-healing repair | Not started |
 | 8 | Visual editor source mapping | Not started |
@@ -697,15 +697,16 @@ without a version, and resolve to exactly the approved 1.13.0. No existing pin c
    put it in the release APK. The release task has to stay registered (AGP 9.5.1 needs release unit tests enabled to create the
    Compose Preview tasks, see 5.1), so `app/build.gradle.kts` **skips that one task by name**
    (`enabled = name != "testReleaseUnitTest"`): `gradle test` runs the debug tests and reports the release task as SKIPPED. A
-   check after the change: `tasks --all` and the release Compose Preview run-files task still pass.
+   check after the change: `tasks --all` and the release Compose Preview run-files task still pass. **Resolved in Phase 5.4**
+   (below): the skip is gone and the test runs on both variants.
 3. **`createAndroidComposeRule` is deprecated in Compose 1.13.0** (a Kotlin warning); the test uses the `v2` package
    (`androidx.compose.ui.test.junit4.v2`), whose rule runs coroutines on a `StandardTestDispatcher`.
 4. **`AppNavHost` takes an optional controller.** The test needs the controller to read the current route, so the generated host
    is `AppNavHost(modifier, navController: NavHostController = rememberNavController())`. `MainActivity` is byte-identical and
    still calls `AppNavHost()`. The static navigation rules still see every route, the start destination and every `navigate`
    target (`dynamic = False`).
-5. **The test uses a tall screen** (`@Config(qualifiers = "w411dp-h914dp")`) because the generated screens are a plain
-   `Column` that does not scroll; see the limitation below.
+5. **The test used a tall screen** (`@Config(qualifiers = "w411dp-h914dp")`) because the generated screens were a plain
+   `Column` that did not scroll. **Removed in Phase 5.4** (below): the screens scroll and the test uses Robolectric's default.
 6. The first `gradle test` downloads Robolectric's instrumented Android jar for API 35 (about 207 MB) from Maven Central.
 
 ### Limitations
@@ -715,15 +716,69 @@ without a version, and resolve to exactly the approved 1.13.0. No existing pin c
   emulator", and nothing here covers gestures, animations, the real window manager or other API levels.
 - A project with `minSdk` above 35 has no navigation tests (see finding 1). A project built on JDK 21 could run API 36, but the
   generated build is JDK 17 and nothing here assumes otherwise.
-- **The generated screens do not scroll.** A screen with many buttons (up to 8, plus Back) most likely does not fit on a small
-  display or in landscape (the emulator run of Phase 5.2 used a three-screen sample on a tall display, so it did not test this);
-  the tests use a tall screen, because on Robolectric's default one 15 of the 40 tests of the 12-screen sample failed. A Phase 5.2
-  limitation that this phase found and did not change.
-- The release unit-test task is skipped (finding 2): the navigation tests do not run against the release variant.
+- *(Phase 5.3 as written; both items below are resolved by Phase 5.4.)* **The generated screens did not scroll**: a screen
+  with 8 buttons did not fit in landscape (reproduced by hand and on the emulator in 5.4), the tests used a tall screen, and the
+  release unit-test task was skipped.
 - The tests only know what the spec says. They do not test an app that has been edited afterwards, and they stay correct only
   while `MainActivity`, `AppNavHost` and the screens keep the shape the generator wrote.
 - The instrumented (`androidTest`) form is not generated: it needs an emulator or device, which neither the build container nor a
   CI runner without KVM has.
+
+## Scrolling screens, release tests and signing (Phase 5.4)
+
+Phase 5.4 fixes what the Phase 5.3 tests exposed and a hand test confirmed: on the 12-screen sample, in landscape, the first
+screen's eight buttons were cut off at Step 4 and mouse or touch scrolling did nothing. Branch `p3/phase5-scroll-signing`,
+based on `p3/phase5-nav-tests` at `aac94e1`. Deterministic and internal; no pin, contract, worker or Docker file changed.
+
+| Change | Where |
+|---|---|
+| Every generated screen scrolls: `Modifier.fillMaxSize().padding(innerPadding).verticalScroll(rememberScrollState()).padding(24.dp)` | `screens.py` |
+| The generated test scrolls to every button before it taps it and to every title before it checks it is shown (`performScrollTo`) | `navtests.py` |
+| The tall-screen workaround (`@Config(qualifiers = "w411dp-h914dp")`) is removed | `navtests.py` |
+| The test registers `ComponentActivity` with Robolectric itself (rule `activityRegistration`, `order = 0`, before the Compose rule), so the release unit-test task is no longer skipped | `navtests.py` |
+| `VERIFIED_BUILD` records both unit-test tasks, the scroll and the signing investigation | `versions.py` |
+
+**Why the scroll is where it is.** It sits after the system-bar padding and before the content padding, so nothing is clipped
+under the bars, and `fillMaxSize()` before it keeps the content centred when it fits (a screen with few buttons looks as before).
+The scroll position of a screen is kept when Back returns to it, which is right for users and is why the test scrolls to a
+title before checking it. Only generated screens change; the Phase 5.1 sample screen (no spec) and a project without a spec are
+byte-identical to before.
+
+**The test now checks the scrolling.** `performScrollTo` fails on a node that has no scroll container, so removing the scroll
+from a generated screen makes tests fail (two Kotlin mutants, below). On Robolectric's default small screen the 12-screen sample
+went from 15 of 40 failures (Phase 5.3's finding) to 0 of 40, but only after the test itself scrolled: scrolling alone, with
+the old test that taps without scrolling, still failed the same 15.
+
+**Release unit tests (investigated, then adopted).** Phase 5.3 skipped `testReleaseUnitTest` because `ui-test-manifest` is
+debug-only. A throwaway copy of the three-screen sample with the registration rule and without the skip passed **7 of 7 on both
+the debug and the release task**, both with `ui-test-manifest` kept and with it removed. The rule was adopted. `ui-test-manifest`
+stays declared (one of the five approved dependencies); for these JVM tests it is now redundant, and dropping it would be your call.
+
+**Signing (investigated only; nothing is generated).** With a throwaway key created in the build container and deleted afterwards,
+a copy of the three-screen sample got an optional block at the end of `app/build.gradle.kts` that reads `keystore.properties`
+(`storeFile`, `storePassword`, `keyAlias`, `keyPassword`) and, only if the file exists, defines a `release` `signingConfig`. It needs
+`import java.util.Properties` at the top (writing `java.util.Properties()` fails in a Gradle script, because `java` is the
+Java extension there). Result: without the file the build is unchanged (`app-release-unsigned.apk`, `apksigner` does not verify,
+exit 0); with it `assembleRelease` gives `app-release.apk` that **`apksigner verify` accepts** (v2 scheme; minSdk 24 needs no v1)
+and zipalign accepts, `bundleRelease` gives an AAB that **`jarsigner -verify` accepts**, and the `classes.dex` is identical to the
+unsigned build's. The generated `.gitignore` already ignores `keystore.properties` and `*.jks`. **Not decided**: whether to generate
+this block, who owns a real key, Play App Signing, key storage in CI; those are your decisions, and a real key must never be
+in a repository or in a generated file.
+
+### Limitations (Phase 5.4)
+
+- **Compose previews are not verified.** Gradle only creates the preview run-files tasks (they pass); rendering needs Android
+  Studio, and nobody has looked at one yet. Every screen still has its `@Preview`.
+- The emulator checks ran on one emulator (Pixel 8 profile, Android 17, API 37.0, x86_64) with the sizes, rotation, dark mode and font
+  scale listed below; other devices, API levels and a physical phone are untested.
+- A screen is one scrolling column: no sticky Back button, no scrollbar, no tablet or two-pane layout. A long list of buttons in
+  landscape needs scrolling by design.
+- `ui-test-manifest` is declared but redundant for the JVM tests (see above).
+- Lint now reports **5 warnings**, not 4: Google published AGP 9.5.2 on or before 2026-11-21, so "a newer version of
+  com.android.application than 9.5.1 is available" joined the existing "newer Gradle (9.9.2)" notice, both `AndroidGradlePluginVersion`.
+  The pins are unchanged on purpose.
+- The generated `app/build.gradle.kts` still says "no test exists yet" in a comment of the Phase 5.1 template, which is not true
+  for a project with a spec (the comment is part of the byte-identical default project and was left alone).
 
 ## Generation workflow, supported technologies, repair rules
 
@@ -1440,6 +1495,65 @@ SDK; refusals when an anchor is missing, repeated or a file is absent; that the 
 `AppNavHost`'s signature and `MainActivity` unchanged; the review's navigation facts; determinism; the patch limits; and the pins
 of the four built projects.
 
+### Phase 5.4 verification (scrolling screens; `p3/phase5-scroll-signing`, based on `p3/phase5-nav-tests` at `aac94e1`)
+
+| Check | Result |
+|---|---|
+| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen` | 1832 passed, 5 skipped, 1 xfailed (the 1824 / 5 / 1 of `aac94e1` plus 8 net new tests) |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4), same suite from a fresh export of the working tree | 1836 passed, 1 skipped, 1 xfailed (the 1828 / 1 / 1 of `aac94e1` plus 8) |
+| `ruff check`, `ruff format --check`, `compileall` | clean on both platforms |
+| Mutation testing (Python) | **88 of 88 caught**: 17 new mutants (scroll removed, moved before or after the right padding, horizontal instead of vertical, imports dropped, centring lost, `fillMaxSize` dropped; the test not scrolling before click or title check, its import dropped, the tall screen back; the activity registration removed, ordered after the Compose rule, for the wrong class, or its imports dropped), plus the Phase 5.3 set re-run on the new code, **71 of 71** (it had 76: five mutants of code that no longer exists, the tall-screen qualifier and the release-task skip, were removed). One of the 71 makes the generator loop forever and is detected only by the harness's 180 s timeout. No mutant survived |
+| Mutation testing of the generated app (Kotlin, Docker) | **16 of 16 caught**, none by a compile error: the 14 of Phase 5.3 plus "Home does not scroll" and "Settings does not scroll" (`performScrollTo` fails without a scroll container); the unmodified copy passes 7 of 7 before and after |
+| Static review of the generated projects | no finding in the 9 specs x 3 configs of 5.3 and none in the four built samples (`review_patch` before they were applied) |
+| **Gradle builds of the four samples, each from an empty build directory** | **all 28 commands exit 0**; the navigation tests pass on the debug **and the release** unit-test task |
+
+**Gradle builds (Docker, 2026-11-21, the same image and volumes).** JDK 17, system Gradle 9.6.0, AGP 9.5.1, Kotlin 2.4.21, Compose BOM
+2026.11.01, SDK platform 37.1; the same seven commands as in 5.3 (`G build`, `tasks --all`, `assembleRelease`, `bundleRelease`,
+`lint`, `:app:lintRelease`, and `:app:testDebugUnitTest --rerun :app:testReleaseUnitTest --rerun`). Every sample is the project the
+pinned SHA-256 of `test_templates_navtests.py` describes (source digests re-computed in the container and equal).
+
+| Sample | Files | `G build` | Navigation tests: debug / release (default Robolectric screen) |
+|---|---|---|---|
+| `one` | 20 | 111 tasks, 1m17s | 2 / 2 passed |
+| `three` | 22 | 111 tasks, 1m32s | 7 / 7 passed |
+| `keywords` | 23 | 111 tasks, 1m15s | 8 / 8 passed |
+| `twelve-full` | 31 | 111 tasks, 2m57s | **40 / 40 passed** (15 of 40 failed on this screen in 5.3 without scrolling) |
+
+Lint: **0 errors and 5 warnings** on every sample (see the Phase 5.4 limitations: the fifth is the AGP 9.5.2 notice). The only
+warning in any log besides lint is "Unable to strip ... libandroidx.graphics.path.so" (no NDK in the image).
+
+| Sample | Release APK (unsigned) | Release AAB (unsigned) | Debug APK |
+|---|---|---|---|
+| `one` | 9,340,694 B, `f6efea2ff6d39cf42cc824baa4f37d8985f0121032642bfe8ff5bff01e6fd493` | 8,959,616 B, `f61ffcafcaa857fb1757b85af3da62b59dc2defc2905912750c299724b79ecd2` | 13,314,378 B |
+| `three` | 9,342,734 B, `519c39ef62e232e1c6e6640876c16b5b6f3fd309f5b520fc0a36fcd503da870d` | 8,967,812 B, `6f1ef5c7cce5784622c4cac7ea7eaecfe0d2382b7064dc1265efa2bde035d3e9` | 13,332,802 B |
+| `keywords` | 9,358,670 B, `7eceabe72288422f8e08ff9b6a587695200b6fb600f3f763e11d3a8cf7638e32` | 8,969,551 B, `6542747505119fad4da41979db36812082efee077647d0c71277aa539d7fa85f` | 13,332,358 B |
+| `twelve-full` | 9,378,298 B, `d3ea871703a24849858eb3b9fbab9a4d919b2648067a5abf4cf98a9e802d6417` | 8,992,708 B, `b3d1064a28daf5c064ba292c2266946e9d385ca64239929e79e759212e4bfc80` | 13,368,362 B |
+
+All four: minSdk 24, targetSdk 36, compileSdk 37, release APK not debuggable, zipalign OK, outputs **unsigned**, no test library in
+any release APK and no `ComponentActivity` in its manifest (only the debug APK carries `ui-test-manifest`'s). The release APKs have
+the same sizes as in 5.3 and different hashes, as the screens changed.
+
+**Emulator, before and after (Pixel 8 emulator, Android 17, API 37.0).** The 12-screen sample's debug APK built before the fix
+(the 5.3 build, `e014cacb94a9...`) and after it (`aeec18e69b98...`, the build above) were installed in turn with `adb` and driven
+with `uiautomator`: open the first screen (8 buttons), scroll until the button "Step 8" is fully visible, tap it, check the
+"Step 8" screen, press Back. The emulator's size, density, font scale, night mode and rotation were set per condition and
+**restored afterwards** (size 1080x2400, density 420, rotation 0, night mode off, as found). No `FATAL EXCEPTION` in any run.
+
+| Condition | Before the fix | After the fix |
+|---|---|---|
+| Portrait 1080x2400 | Step 8 visible, works | works |
+| Small portrait 720x1280 at 320 dpi (360 x 640 dp) | works, all 8 fit | works |
+| Small portrait, dark mode | works | works, readable (screenshot checked) |
+| Small portrait, font scale 1.5 | works, all 8 fit | works |
+| **Landscape 1280x720 (640 x 360 dp)** | **Step 8 never reachable** (cut off after Step 3 or 4, scrolling does nothing) | **reachable after 2 swipes**, opens, Back returns |
+| **Landscape 2400x1080, dark mode** | **never reachable** (Step 4 and a sliver of 5) | **reachable after 1 swipe**, opens, Back returns |
+
+So the defect only appears when the screen is short, i.e. in landscape; 360 x 640 dp portrait still fits eight buttons. In every
+reachable case the "Step 8" screen opened and Back returned to the first screen. Screenshots and `results.json` are kept in the
+validation scratch directory, not in the repository. **Not run**: the Compose previews in Android Studio, a physical device, other API
+levels, other samples. The Medium Phone emulator was not running at the time (it had stopped during the first attempt, under memory
+pressure from Docker and two emulators), so the Pixel 8 emulator was used.
+
 ### Platform coverage (Windows and Linux together)
 
 Some tests can only run on one operating system, so each platform skips some. Together they cover all 415 tests:
@@ -1700,9 +1814,14 @@ logcat), the other samples and the previews were not run; the outputs are unsign
 Phase 5.3 (generated navigation tests): see "Generated navigation tests (Phase 5.3)" above. In short: a project with a spec
 gets a Robolectric + Compose-test `NavigationTest` and five test-only dependencies; it passes on the debug unit-test task of
 four sample specs and fails when the generated navigation is broken. It simulates **API 35 on JDK 17** (Robolectric 4.18.1
-needs Java 21 for API 36), so a project with `minSdk` above 35 gets no test; the **release unit-test task is skipped**
-(`ui-test-manifest` is debug-only); the generated screens do not scroll, which the tall test screen hides; there is no
-instrumented test; the default project (no spec) is unchanged and has no test.
+needs Java 21 for API 36), so a project with `minSdk` above 35 gets no test; there is no instrumented test; the default
+project (no spec) is unchanged and has no test. Phase 5.3 skipped the release unit-test task and hid the missing scrolling behind a
+tall test screen; **Phase 5.4 fixed both** (scrolling screens, activity registration in the test).
+
+Phase 5.4 (scrolling, release tests, signing): see "Scrolling screens, release tests and signing (Phase 5.4)" above. In short: the
+generated screens scroll and the tests check it; the navigation tests run on the debug and release tasks; signing was tried only
+with a throwaway key (an optional `keystore.properties` block works, nothing is generated); **the Compose previews are still
+unverified**, and the emulator checks cover one emulator, one sample and a few sizes.
 
 ## Unfinished integration work
 

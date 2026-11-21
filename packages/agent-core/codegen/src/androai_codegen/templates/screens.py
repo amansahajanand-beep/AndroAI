@@ -78,6 +78,8 @@ def screen_source(config: ProjectConfig, spec: ProjectSpec, screen: ScreenSpec) 
         callbacks.append("onBack")
 
     imports = {
+        "androidx.compose.foundation.rememberScrollState",
+        "androidx.compose.foundation.verticalScroll",
         "androidx.compose.foundation.layout.Arrangement",
         "androidx.compose.foundation.layout.Column",
         "androidx.compose.foundation.layout.fillMaxSize",
@@ -115,6 +117,7 @@ def screen_source(config: ProjectConfig, spec: ProjectSpec, screen: ScreenSpec) 
         "            modifier = Modifier",
         "                .fillMaxSize()",
         "                .padding(innerPadding)",
+        "                .verticalScroll(rememberScrollState())",
         "                .padding(24.dp),",
         "            verticalArrangement =",
         "                Arrangement.spacedBy(16.dp, Alignment.CenterVertically),",
