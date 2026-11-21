@@ -39,11 +39,6 @@ TEST_CLASS = "NavigationTest"
 CATALOG_PATH = "gradle/libs.versions.toml"
 APP_BUILD_PATH = "app/build.gradle.kts"
 
-# Robolectric's screen: a tall phone, so that a screen with many buttons is laid out completely
-# (the generated screens are a plain Column that does not scroll; the default Robolectric screen is
-# 320 x 470 dp). The app itself is not tested on other sizes: see the limitations.
-ROBOLECTRIC_QUALIFIERS = "w411dp-h914dp"
-
 
 def navigation_tests_supported(config: ProjectConfig) -> bool:
     """Whether the navigation tests can run for ``config``.
@@ -81,22 +76,14 @@ _BUILD_DEPENDENCIES = (
 
 # ``ui-test-manifest`` (which declares the ComponentActivity a Compose test launches) can only be a
 # ``debugImplementation``: as a ``testImplementation`` its manifest is not merged (both variants
-# failed in a real run), and a ``releaseImplementation`` would put it in the release APK. The
-# release unit-test task has to stay enabled (without it AGP 9.5.1 cannot create the Compose Preview
-# tasks, see kotlin_compose.py), so it is skipped instead of failing on the missing activity.
-_BUILD_RELEASE_TESTS_SKIPPED = (
-    "\n"
-    "tasks.withType<Test>().configureEach {\n"
-    "    // ComponentActivity, which the navigation tests launch, is declared by ui-test-manifest, "
-    "and only\n"
-    "    // the debug variant has that library. The release unit-test task has to exist (the "
-    "Compose\n"
-    "    // Preview needs it) but would fail on the missing activity, so it does not run.\n"
-    '    enabled = name != "testReleaseUnitTest"\n'
-    "}\n"
-)
+# failed in a real run), and a ``releaseImplementation`` would put it in the release APK. Phase 5.3
+# therefore skipped the release unit-test task. Phase 5.4 removed that skip: the test registers the
+# ComponentActivity with Robolectric itself (the ``activityRegistration`` rule, which runs before
+# the Compose rule starts the activity), so the same test passes on the debug AND the release task,
+# with or without ui-test-manifest (both were run). The library stays, as approved.
 
 _FIXED_IMPORTS = (
+    "android.content.ComponentName",
     "androidx.activity.ComponentActivity",
     "androidx.compose.runtime.remember",
     "androidx.compose.ui.platform.LocalContext",
@@ -107,6 +94,7 @@ _FIXED_IMPORTS = (
     "androidx.compose.ui.test.junit4.v2.createAndroidComposeRule",
     "androidx.compose.ui.test.onFirst",
     "androidx.compose.ui.test.performClick",
+    "androidx.compose.ui.test.performScrollTo",
     "androidx.navigation.compose.ComposeNavigator",
     "androidx.navigation.testing.TestNavHostController",
     "org.junit.Assert.assertEquals",
@@ -114,18 +102,32 @@ _FIXED_IMPORTS = (
     "org.junit.Before",
     "org.junit.Rule",
     "org.junit.Test",
+    "org.junit.rules.ExternalResource",
     "org.junit.runner.RunWith",
     "org.robolectric.RobolectricTestRunner",
+    "org.robolectric.RuntimeEnvironment",
+    "org.robolectric.Shadows.shadowOf",
     "org.robolectric.annotation.Config",
 )
 
 # The class every ``NavigationTest`` starts with, whatever the spec. ``__SDK__``,
-# ``__QUALIFIERS__`` and ``__THEME__`` are filled in by ``navigation_test_source``.
+# and ``__THEME__`` are filled in by ``navigation_test_source``.
 _PROLOGUE = """\
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [__SDK__], qualifiers = "__QUALIFIERS__")
+@Config(sdk = [__SDK__])
 class NavigationTest {
-    @get:Rule
+    // Declares ComponentActivity to Robolectric before the Compose rule launches it, so the
+    // test does not need the debug-only ui-test-manifest and runs on the release task too.
+    @get:Rule(order = 0)
+    val activityRegistration = object : ExternalResource() {
+        override fun before() {
+            val app = RuntimeEnvironment.getApplication()
+            shadowOf(app.packageManager)
+                .addActivityIfNotPresent(ComponentName(app, ComponentActivity::class.java))
+        }
+    }
+
+    @get:Rule(order = 1)
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     private lateinit var navController: TestNavHostController
@@ -153,6 +155,7 @@ class NavigationTest {
         composeRule
             .onAllNodes(hasText(text(id)) and !hasClickAction())
             .onFirst()
+            .performScrollTo()
             .assertIsDisplayed()
     }
 
@@ -170,6 +173,7 @@ class NavigationTest {
     private fun clickButton(labelId: Int, occurrence: Int = 0) {
         composeRule
             .onAllNodes(hasText(text(labelId)) and hasClickAction())[occurrence]
+            .performScrollTo()
             .performClick()
         composeRule.waitForIdle()
     }
@@ -325,7 +329,6 @@ def navigation_test_source(config: ProjectConfig, spec: ProjectSpec) -> str:
     out += [""]
     out += (
         _PROLOGUE.replace("__SDK__", str(TOOLCHAIN.robolectric_sdk))
-        .replace("__QUALIFIERS__", ROBOLECTRIC_QUALIFIERS)
         .replace("__THEME__", config.theme_function)
         .splitlines()
     )
@@ -385,10 +388,7 @@ def with_test_dependencies(catalog: str, build_gradle: str) -> tuple[str, str]:
     build_gradle = _replace_once(
         build_gradle,
         _BUILD_DEPENDENCIES_ANCHOR,
-        _BUILD_DEPENDENCIES_ANCHOR.removesuffix("}\n")
-        + "\n".join(_BUILD_DEPENDENCIES)
-        + "\n}\n"
-        + _BUILD_RELEASE_TESTS_SKIPPED,
+        _BUILD_DEPENDENCIES_ANCHOR.removesuffix("}\n") + "\n".join(_BUILD_DEPENDENCIES) + "\n}\n",
         APP_BUILD_PATH,
     )
     return catalog, build_gradle

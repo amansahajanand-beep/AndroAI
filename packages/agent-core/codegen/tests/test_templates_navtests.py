@@ -176,38 +176,20 @@ def test_only_the_five_libraries_and_two_versions_were_added_to_the_catalog():
     )
 
 
-RELEASE_TESTS_SKIPPED = (
-    "\n"
-    "tasks.withType<Test>().configureEach {\n"
-    "    // ComponentActivity, which the navigation tests launch, is declared by ui-test-manifest, "
-    "and only\n"
-    "    // the debug variant has that library. The release unit-test task has to exist (the "
-    "Compose\n"
-    "    // Preview needs it) but would fail on the missing activity, so it does not run.\n"
-    '    enabled = name != "testReleaseUnitTest"\n'
-    "}\n"
-)
-
-
-def test_the_build_file_gets_five_dependency_lines_and_the_release_test_skip_and_nothing_else():
+def test_the_build_file_gets_five_dependency_lines_and_nothing_else():
     before = rendered()[BUILD]
     after = rendered(spec=THREE)[BUILD]
     assert before.endswith("    debugImplementation(libs.androidx.compose.ui.tooling)\n}\n")
-    assert after == (
-        before.removesuffix("}\n")
-        + "\n".join(EXPECTED_DEPENDENCY_LINES)
-        + "\n}\n"
-        + RELEASE_TESTS_SKIPPED
-    )
+    assert after == before.removesuffix("}\n") + "\n".join(EXPECTED_DEPENDENCY_LINES) + "\n}\n"
     block = top_level_blocks(after)["dependencies"].split("\n")
     assert block[-5:] == EXPECTED_DEPENDENCY_LINES
 
 
-def test_the_release_unit_test_task_is_skipped_but_still_enabled_for_the_compose_preview():
+def test_no_unit_test_task_is_switched_off_any_more():
+    # Phase 5.3 skipped the release unit-test task; Phase 5.4 runs the test on both variants.
     after = rendered(spec=THREE)[BUILD]
-    # Only the release task is switched off, by name; no other task or variant is touched.
-    assert after.count("enabled = ") == 1
-    assert 'enabled = name != "testReleaseUnitTest"\n' in after
+    for word in ("enabled = ", "withType<Test>", "testReleaseUnitTest", "onlyIf"):
+        assert word not in after, word
     # The release variant keeps its unit tests (AGP 9.5.1 needs them to create the Preview tasks).
     blocks = top_level_blocks(after)
     assert blocks["androidComponents"] == top_level_blocks(rendered()[BUILD])["androidComponents"]
@@ -283,15 +265,61 @@ def test_the_test_lives_next_to_the_navigation_host_in_the_test_source_set():
     assert not [p for p in files if "com/example" in p]
 
 
+def test_the_test_scrolls_to_what_it_clicks_and_checks():
+    # Phase 5.4: the screens scroll, so the test scrolls to a button before it taps it and to a
+    # title before it checks it is displayed (a scroll position is kept when Back returns). On a
+    # screen without a scroll container performScrollTo fails, so removing the scroll is caught.
+    source = source_of()
+    assert "import androidx.compose.ui.test.performScrollTo\n" in source
+    assert source.count(".performScrollTo()") == 2
+    assert (
+        "            .onFirst()\n            .performScrollTo()\n            .assertIsDisplayed()\n"
+    ) in source
+    assert "            .performScrollTo()\n            .performClick()\n" in source
+
+
+def test_the_test_registers_its_activity_before_the_compose_rule_launches_it():
+    # Phase 5.4: this is what lets the same test pass on the release unit-test task, whose classpath
+    # has no ui-test-manifest. The registration rule has to run first (order 0), because the Compose
+    # rule starts the activity as it is applied, before any @Before method runs.
+    source = source_of()
+    registration = (
+        "    @get:Rule(order = 0)\n"
+        "    val activityRegistration = object : ExternalResource() {\n"
+        "        override fun before() {\n"
+        "            val app = RuntimeEnvironment.getApplication()\n"
+        "            shadowOf(app.packageManager)\n"
+        "                .addActivityIfNotPresent("
+        "ComponentName(app, ComponentActivity::class.java))\n"
+        "        }\n"
+        "    }\n"
+        "\n"
+        "    @get:Rule(order = 1)\n"
+        "    val composeRule = createAndroidComposeRule<ComponentActivity>()\n"
+    )
+    assert registration in source
+    for item in (
+        "android.content.ComponentName",
+        "org.junit.rules.ExternalResource",
+        "org.robolectric.RuntimeEnvironment",
+        "org.robolectric.Shadows.shadowOf",
+    ):
+        assert f"import {item}\n" in source
+    assert source.count("@get:Rule") == 2
+
+
 def test_the_runner_the_sdk_and_the_compose_rule():
     source = source_of()
     assert "@RunWith(RobolectricTestRunner::class)\n" in source
     # Robolectric 4.18.1 needs Java 21 for API 36; the generated build is JDK 17.
-    assert '@Config(sdk = [35], qualifiers = "w411dp-h914dp")\n' in source
+    # No screen-size qualifier: the generated screens scroll, so Robolectric's default small screen
+    # is used (Phase 5.3 needed a tall one).
+    assert "@Config(sdk = [35])\n" in source
+    assert "qualifiers" not in source and "w411dp" not in source
     assert TOOLCHAIN.robolectric_sdk == 35
     assert "import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule\n" in source
     assert "androidx.compose.ui.test.junit4.createAndroidComposeRule" not in source  # deprecated
-    assert "val composeRule = createAndroidComposeRule<ComponentActivity>()" in source
+    assert "    val composeRule = createAndroidComposeRule<ComponentActivity>()\n" in source
     assert "TestNavHostController(context)" in source
     assert "AppNavHost(navController = navController)" in source
     assert "NotesAppTheme {" in source
@@ -305,8 +333,8 @@ def test_the_theme_function_follows_the_project_name():
 
 def test_texts_are_looked_up_in_resources_and_never_written_into_kotlin():
     for spec in ALL_SPECS.values():
-        # The only string literal of the class is the Robolectric screen qualifier.
-        assert re.findall(r'"[^"\n]*"', source_of(spec)) == ['"w411dp-h914dp"']
+        # The class has no string literal at all.
+        assert re.findall(r'"[^"\n]*"', source_of(spec)) == []
     # Words of THREE's texts ("About & credits", "Made with Bob's help") appear nowhere.
     assert "credits" not in source_of() and "Bob" not in source_of()
 
@@ -866,14 +894,14 @@ FULL_CONFIG = {
 # files sorted by path. If one changes after a deliberate edit, build the project again and update
 # this and the progress document together.
 BUILT = [
-    ("one", {}, ONE, "ba471a2b29b22df311dbaffd8840b46544fdd8247f01f5302a4627813f619dd7"),
-    ("three", {}, THREE, "7088c3060d4a8b93a186b0cd58d60fff7e59f823adf5b2376ce80a59069e01c0"),
-    ("keywords", {}, KEYWORDS, "6e881be99421b37026e26ef03b30bc10f1f67eeb7d26998e287ae1997c8e6d78"),
+    ("one", {}, ONE, "d80872148f35cc380b4d2623ed03bd96e26cf98606b3954f11c844123434394a"),
+    ("three", {}, THREE, "4735dcfb1269989a94117f3b355575004a8e1555a87a4c99ff7cd08a2b9d044c"),
+    ("keywords", {}, KEYWORDS, "654cd0bd2823d37c6ceee6edd50806f6e62ef0e86bf4882b0da58aaa04dd9180"),
     (
         "twelve-full",
         FULL_CONFIG,
         SPECS["twelve"],
-        "6622c6bd56d2401bb8a169ab6e322b39f8bcd493852fd3d997f292bcd7896d1d",
+        "bb6be1a22a6998b119801bee1949deb657f76e578902d8b8e7d1a5f2f2f99748",
     ),
 ]
 
@@ -903,10 +931,12 @@ def test_the_default_project_still_claims_no_test_and_the_spec_projects_no_relea
     # The default (no spec) project has none: its record never mentions a unit-test task.
     default_claim = str(VERIFIED_BUILD["outputs"]) + " ".join(VERIFIED_BUILD["tasks"])
     assert "UnitTest" not in default_claim and "navigation" not in default_claim.lower()
-    # The spec projects' record says the release task is skipped, not that it passed.
-    assert "release unit-test task is skipped" in str(VERIFIED_BUILD["spec_tests"])
-    assert "testReleaseUnitTest" not in " ".join(VERIFIED_BUILD["spec_tasks"])
-    # What is still not claimed anywhere in the record.
+    # Phase 5.4: the spec projects' record claims both unit-test tasks, and says nothing is skipped.
+    assert ":app:testReleaseUnitTest --rerun" in VERIFIED_BUILD["spec_tasks"]
+    assert "debug AND the release unit-test task" in str(VERIFIED_BUILD["spec_tests"])
+    assert "skipped" not in str(VERIFIED_BUILD["spec_tests"])
+    assert "scroll" in str(VERIFIED_BUILD["spec_scroll"])
+    # What is still not claimed anywhere in the record: signed outputs, instrumented tests.
     claim = " ".join(str(value) for value in VERIFIED_BUILD.values())
-    for not_verified in ("emulator", "connected", "androidTest", "signed release"):
+    for not_verified in ("connected", "androidTest", "signed release"):
         assert not_verified not in claim.replace("unsigned", ""), not_verified

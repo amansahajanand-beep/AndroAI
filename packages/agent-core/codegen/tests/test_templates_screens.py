@@ -259,6 +259,33 @@ def test_a_screen_with_nothing_to_wire_keeps_the_simple_signature():
     assert "Button" not in only
 
 
+@pytest.mark.parametrize("name", SPECS)
+def test_every_screen_scrolls_vertically_and_keeps_its_content_centred(name):
+    # Phase 5.4: a screen with many buttons (a real emulator run: 8 buttons cut off in landscape)
+    # has to scroll. The scroll is applied after the system-bar padding and before the content
+    # padding, so nothing is clipped under the bars and the centring (min height = screen) stays.
+    files = rendered(spec=SPECS[name])
+    screens = [p for p in files if "/ui/screens/" in p]
+    assert len(screens) == len(SPECS[name].screens)
+    for path in screens:
+        text = files[path]
+        assert (
+            "                .fillMaxSize()\n"
+            "                .padding(innerPadding)\n"
+            "                .verticalScroll(rememberScrollState())\n"
+            "                .padding(24.dp),\n"
+        ) in text, path
+        assert text.count("verticalScroll(") == 1 and text.count("rememberScrollState()") == 1
+        assert "import androidx.compose.foundation.rememberScrollState\n" in text
+        assert "import androidx.compose.foundation.verticalScroll\n" in text
+        assert "Arrangement.spacedBy(16.dp, Alignment.CenterVertically)" in text
+
+
+def test_the_sample_screen_of_a_project_without_a_spec_is_unchanged_by_the_scroll():
+    # Only generated screens scroll; the Phase 5.1 sample screen (no spec) is byte-identical.
+    assert "verticalScroll" not in rendered()[f"{ROOT}/ui/home/HomeScreen.kt"]
+
+
 def test_a_description_becomes_a_second_text():
     files = rendered(spec=THREE)
     assert "stringResource(R.string.screen_home_body)" in files[f"{ROOT}/ui/screens/HomeScreen.kt"]
