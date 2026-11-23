@@ -13,11 +13,18 @@ jobs:
         with:
           python-version: "3.12"
       - run: >
-          pip install -e "packages/contracts[dev]" -e "apps/api[dev]"
+          pip install -e "packages/contracts[dev]" -e "packages/storage[dev]" -e "packages/android-tools[dev]" -e "apps/api[dev]"
           -e workers/orchestration -e workers/ai-agent
           -e workers/android-build -e workers/android-test
       - run: python -c "import androai_orchestration.main, androai_agent.main, androai_android_build.main, androai_android_test.main"
-      - run: pytest packages/contracts apps/api
+      - run: pytest packages/contracts packages/storage packages/android-tools apps/api
+      - name: Migration SQL renders for PostgreSQL
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql://u:p@localhost/db
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET: ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci
+        run: alembic upgrade head --sql > /dev/null
 
   web:
     runs-on: ubuntu-latest

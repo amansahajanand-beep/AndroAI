@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "androai-codegen"
+version = "0.1.0"
+description = "Android code generation, editing, review and repair engine (library). Owner: Person 3."
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7,<3",
+    "filelock>=3.13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+androai_codegen = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+# SIM905 would rewrite readable wrapped "a b c".split() word lists into one huge list literal.
+ignore = ["SIM905"]
+
+[tool.ruff.lint.per-file-ignores]
+# Pure data: curated tables and embedded fixture files, where wrapping hurts more than it helps.
+"src/androai_codegen/review/catalog.py" = ["E501"]
+# The version catalog template: a TOML inline table has to stay on one line.
+"src/androai_codegen/templates/kotlin_compose.py" = ["E501"]
+"tests/sample_project.py" = ["E501"]

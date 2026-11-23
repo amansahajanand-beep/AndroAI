@@ -2,6 +2,7 @@ from fastapi import APIRouter, Response, status
 
 from ...db import check_database
 from ...redis_client import check_redis
+from . import admin, admin_workers, artifacts, auth, builds, projects, testruns, users, worker
 
 router = APIRouter()
 
@@ -16,4 +17,13 @@ def readiness(response: Response) -> dict:
     return {"status": "ready" if ok else "degraded", "checks": checks}
 
 
-# Feature routers: router.include_router(projects_router, prefix="/projects")
+router.include_router(auth.router, prefix="/auth")
+router.include_router(users.router, prefix="/users")
+router.include_router(projects.router, prefix="/projects")
+router.include_router(artifacts.router, prefix="/artifacts")
+router.include_router(admin.router, prefix="/admin")
+router.include_router(admin_workers.router, prefix="/admin")
+router.include_router(builds.router, prefix="/builds")
+router.include_router(testruns.router, prefix="/tests")
+router.include_router(worker.router, prefix="/worker")
+# Not yet implemented (see docs/BACKEND_PROGRESS.md): /agent, /usage, /billing

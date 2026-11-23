@@ -36,5 +36,8 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
+# Local object storage / data (dev only)
+.data/
+
 # Docker volumes / logs
 *.log

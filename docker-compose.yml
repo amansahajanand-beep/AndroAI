@@ -39,6 +39,8 @@ services:
       # Override host-based URLs from .env with in-network service names.
       DATABASE_URL: postgresql://${POSTGRES_USER:-androai}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-androai}
       REDIS_URL: redis://redis:6379/0
+    volumes:
+      - apidata:/app/apps/api/.data   # dev-only local object storage
     ports:
       - "8000:8000"
     depends_on:
@@ -59,3 +61,4 @@ services:
 
 volumes:
   pgdata:
+  apidata:
