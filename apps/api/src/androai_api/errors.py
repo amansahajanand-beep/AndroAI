@@ -7,6 +7,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from androai_storage import InvalidKey
+
 log = logging.getLogger(__name__)
 
 
@@ -39,6 +41,12 @@ def register_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             _body("validation_error", "Invalid request", exc.errors()), status_code=422
         )
+
+    @app.exception_handler(InvalidKey)
+    async def _invalid_key(request: Request, exc: InvalidKey):
+        # A storage key outside the caller's tenant scope means corrupted data or an attack.
+        log.error("SECURITY storage key rejected path=%s reason=%s", request.url.path, exc)
+        return JSONResponse(_body("forbidden", "Access denied"), status_code=403)
 
     @app.exception_handler(Exception)
     async def _unhandled(_: Request, exc: Exception):

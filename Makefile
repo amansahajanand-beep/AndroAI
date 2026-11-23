@@ -18,7 +18,7 @@ install: install-py install-web
 
 install-py:
 	python -m venv .venv
-	$(PY) -m pip install -e "packages/contracts[dev]" -e "apps/api[dev]" \
+	$(PY) -m pip install -e "packages/contracts[dev]" -e packages/storage -e packages/android-tools -e "apps/api[dev]" \
 		-e workers/orchestration -e workers/ai-agent -e workers/android-build -e workers/android-test
 
 install-web:
@@ -31,7 +31,7 @@ web:
 	cd apps/web && npm run dev
 
 test:
-	$(PY) -m pytest packages/contracts apps/api
+	$(PY) -m pytest packages/contracts packages/storage packages/android-tools apps/api
 
 migrate:
 	cd apps/api && ../../$(PY) -m alembic upgrade head

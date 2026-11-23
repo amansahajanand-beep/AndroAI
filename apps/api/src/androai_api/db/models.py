@@ -1,10 +1,7 @@
-"""Model registry for Alembic autogenerate.
+"""Model registry for Alembic autogenerate: importing this registers every table on Base.metadata.
 
-Import every module that defines SQLAlchemy models here, e.g.:
-
-    from androai_api.projects import models as _projects  # noqa: F401
-
-Intentionally empty: no product tables exist yet.
+Agent run tables (`orch_*`) are owned by Person 2 on a separate MetaData; see docs/DATABASE.md.
 """
 
+from .. import models as _models  # noqa: F401
 from .base import Base  # noqa: F401
