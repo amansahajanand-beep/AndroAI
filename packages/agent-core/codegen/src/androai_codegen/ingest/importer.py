@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from androai_codegen.detect import MAX_MARKER_BYTES, ProjectKind, detect_from_files
 from androai_codegen.editing.engine import PatchEngine
 from androai_codegen.editing.workspace import Workspace
 
@@ -33,7 +34,7 @@ from .models import (
     SymlinkPolicy,
     ZipSource,
 )
-from .plan import Plan, android_check
+from .plan import Plan, PlannedEntry, android_check, reroot
 from .secrets import ImportProtection, protection_for, scan_workspace
 
 
@@ -115,18 +116,75 @@ def _check_zip_source(path: Path, policy: SymlinkPolicy) -> Path:
     return path.resolve(strict=True)
 
 
-def _require_android(plan: Plan, request: ImportRequest) -> None:
+def _require_android(
+    plan: Plan, request: ImportRequest, read: Callable[[PlannedEntry], str | None] | None = None
+) -> None:
     if not request.require_android_project:
         return
     check = android_check(plan.file_paths())
-    if not check.detected:
+    if check.detected:
+        return
+    by_rel = {entry.rel: entry for entry in plan.entries if entry.kind == "file"}
+
+    def read_marker(rel: str) -> str | None:
+        entry = by_rel.get(rel)
+        return read(entry) if read is not None and entry is not None else None
+
+    detection = detect_from_files(plan.file_paths(), read_marker)
+    if detection.kind not in (ProjectKind.NATIVE_ANDROID, ProjectKind.UNKNOWN):
         raise IngestRejected(
-            IngestCode.NOT_AN_ANDROID_PROJECT,
-            "expected a Gradle build file at the project root and an AndroidManifest.xml "
-            f"(found build files: {check.gradle_files_at_root or 'none'}, "
-            f"manifests: {check.manifests}); "
-            "is this the project's root folder?",
+            IngestCode.UNSUPPORTED_FRAMEWORK,
+            f"detected {detection.reason}; only native Android projects can be imported "
+            "for modification right now",
         )
+    hint = (
+        f" (the Android project looks like it is in '{detection.android_root}')"
+        if detection.android_root
+        else ""
+    )
+    raise IngestRejected(
+        IngestCode.NOT_AN_ANDROID_PROJECT,
+        "expected a Gradle build file at the project root and an AndroidManifest.xml "
+        f"(found build files: {check.gradle_files_at_root or 'none'}, "
+        f"manifests: {check.manifests}); "
+        f"is this the project's root folder?{hint}",
+    )
+
+
+def _locate_subdir(
+    plan: Plan, request: ImportRequest, read: Callable[[PlannedEntry], str | None]
+) -> Plan:
+    """Re-root onto the Android project's folder when the top level is not one."""
+    if not (request.require_android_project and request.locate_android_subdir):
+        return plan
+    if android_check(plan.file_paths()).detected:
+        return plan
+    by_rel = {entry.rel: entry for entry in plan.entries if entry.kind == "file"}
+
+    def read_marker(rel: str) -> str | None:
+        entry = by_rel.get(rel)
+        return read(entry) if entry is not None else None
+
+    detection = detect_from_files(plan.file_paths(), read_marker)
+    if detection.kind is not ProjectKind.NATIVE_ANDROID or not detection.android_root:
+        return plan
+    # detect_from_files strips a wrapper folder itself; the plan was already stripped, so the
+    # Android root it reports is relative to the plan only when there was no extra wrapper.
+    root = detection.android_root
+    if not any(p.startswith(root + "/") for p in plan.file_paths()):
+        return plan
+    return reroot(plan, root)
+
+
+def _entry_reader(opener) -> Callable[[PlannedEntry], str | None]:
+    def read(entry: PlannedEntry) -> str | None:
+        try:
+            with opener(entry) as handle:
+                return handle.read(MAX_MARKER_BYTES).decode("utf-8", errors="replace")
+        except Exception:  # unreadable marker: less evidence, never a crash
+            return None
+
+    return read
 
 
 def _import_directory(
@@ -134,10 +192,14 @@ def _import_directory(
 ) -> tuple[Plan, dict[str, FileRecord], SourceInfo]:
     limits, policy = request.limits, request.symlinks
     plan = local_source.plan_directory(source, limits, policy)
-    _require_android(plan, request)
+    reader = _entry_reader(local_source.open_entry)
+    plan = _locate_subdir(plan, request, reader)
+    _require_android(plan, request, reader)
     records = materialize(plan, local_source.open_entry, workspace, budget)
     if request.verify_source:
         after = local_source.plan_directory(source, limits, policy)
+        if plan.project_subdir:
+            after = reroot(after, plan.project_subdir)
         local_source.verify_source_unchanged(plan, after, records, rehash=True)
     info = SourceInfo(
         kind="local_directory",
@@ -174,7 +236,9 @@ def _import_zip(
                 IngestCode.MALFORMED_ARCHIVE,
                 f"the archive is damaged or unsupported ({type(exc).__name__})",
             ) from exc
-        _require_android(plan, request)
+        reader = _entry_reader(zip_source.open_entry(archive))
+        plan = _locate_subdir(plan, request, reader)
+        _require_android(plan, request, reader)
         records = materialize(
             plan,
             zip_source.open_entry(archive),
@@ -249,6 +313,7 @@ def import_project(
             ),
             android=android_check(records),
             stripped_root=plan.stripped_root,
+            project_subdir=plan.project_subdir,
             skipped=plan.skipped,
             symlinks_skipped=plan.symlinks_skipped,
             nested_archives=plan.nested_archives,

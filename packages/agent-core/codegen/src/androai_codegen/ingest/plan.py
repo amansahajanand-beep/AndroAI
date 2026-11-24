@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from .models import (
@@ -36,6 +36,7 @@ class Plan:
     nested_archives: list[str] = field(default_factory=list)
     nested_archives_total: int = 0
     stripped_root: str | None = None
+    project_subdir: str | None = None
     warnings: list[str] = field(default_factory=list)
     files: int = 0
     directories: int = 0
@@ -76,3 +77,44 @@ def android_check(paths: Iterable[str]) -> AndroidCheck:
         manifests=manifests,
         gradle_files_at_root=root_gradle,
     )
+
+
+def reroot(plan: Plan, subdir: str) -> Plan:
+    """The same plan restricted to ``subdir``, which becomes the project root.
+
+    Everything outside the folder is left out (and counted as skipped); the folder's own entry
+    disappears. The sources of the kept entries are untouched, so they open as before.
+    """
+    prefix = subdir.strip("/") + "/"
+    entries: list[PlannedEntry] = []
+    outside = 0
+    for entry in plan.entries:
+        if entry.rel.startswith(prefix):
+            entries.append(replace(entry, rel=entry.rel[len(prefix) :]))
+        elif entry.rel != prefix.rstrip("/"):
+            outside += 1
+    kept_files = [e for e in entries if e.kind == "file"]
+    warnings = list(plan.warnings)
+    if outside:
+        warnings.append(
+            f"{outside} entr(ies) outside '{subdir}' were not imported; "
+            f"'{subdir}' is the project root"
+        )
+    return replace(
+        plan,
+        entries=entries,
+        skipped_total=plan.skipped_total + outside,
+        nested_archives=[p[len(prefix) :] for p in plan.nested_archives if p.startswith(prefix)],
+        nested_archives_total=sum(1 for e in kept_files if _is_archive(e.rel)),
+        project_subdir=subdir.strip("/"),
+        warnings=warnings,
+        files=len(kept_files),
+        directories=len(entries) - len(kept_files),
+        declared_bytes=sum(e.size for e in kept_files),
+    )
+
+
+def _is_archive(rel: str) -> bool:
+    from .names import is_nested_archive
+
+    return is_nested_archive(rel)

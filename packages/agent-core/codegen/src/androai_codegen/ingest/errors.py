@@ -57,6 +57,7 @@ class IngestCode(StrEnum):
     # integrity and content
     SOURCE_CHANGED = "source_changed_during_import"
     NOT_AN_ANDROID_PROJECT = "not_an_android_project"
+    UNSUPPORTED_FRAMEWORK = "unsupported_framework"
     IO_ERROR = "io_error"
 
 

@@ -117,6 +117,9 @@ class ImportRequest(_Model):
     # GitHub's "Download ZIP" wraps everything in one folder; the project root is inside it.
     strip_single_root: bool = True
     require_android_project: bool = True
+    # Use the Android Gradle project found in a subfolder (``mobile/``, ``android-app/``) as the
+    # project root when the top level is not one. Only a native Android project is re-rooted.
+    locate_android_subdir: bool = True
     # Re-read the source after copying and compare it with what was copied.
     verify_source: bool = True
     label: str | None = Field(default=None, max_length=120)
@@ -230,6 +233,7 @@ class IngestReport(_Model):
     counts: ImportCounts
     android: AndroidCheck
     stripped_root: str | None = None
+    project_subdir: str | None = None
     skipped: list[SkippedItem]  # capped at MAX_LISTED_SKIPPED
     symlinks_skipped: list[str]  # capped at MAX_LISTED_PATHS
     nested_archives: list[str]  # kept as inert files, never opened; capped at MAX_LISTED_PATHS
