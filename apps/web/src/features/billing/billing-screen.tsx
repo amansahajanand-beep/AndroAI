@@ -128,7 +128,7 @@ export function BillingScreen() {
     <PageBody>
       <PageHeader
         title="Billing and usage"
-        description="Usage resets at the start of each billing period. Payments are handled by our billing provider; card details never touch AppPilot."
+        description="Usage resets at the start of each billing period."
         actions={
           <Button variant="outline" loading={redirecting === "portal"} onClick={() => go("portal", api.billing.portal)}>
             Manage billing <ExternalLink />

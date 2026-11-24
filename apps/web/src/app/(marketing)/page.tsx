@@ -16,6 +16,7 @@ import { ThemeToggle } from "@/components/layout/chrome";
 import { PilotFlight } from "@/features/landing/pilot-flight";
 import { LandingAccount, OpenAppButton, StartProjectButton } from "@/components/layout/open-app-button";
 import { HeroIllustration } from "@/features/landing/hero-illustration";
+import { RedirectSignedIn } from "@/features/landing/redirect-signed-in";
 
 const NAV = [
   { href: "#start", label: "Get started" },
@@ -95,6 +96,7 @@ const CARD =
 export default function LandingPage() {
   return (
     <div className="landing min-h-dvh overflow-x-clip bg-background text-foreground">
+      <RedirectSignedIn />
       {/* Hero and nav are always dark, in both themes, like a poster above the page. */}
       <div className="dark">
         <header className="sticky top-0 z-40 px-3 pt-3 sm:px-5 sm:pt-4">

@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { LogoMark } from "@/components/brand/logo";
-import { MockModeBadge, ThemeToggle, UserMenu } from "@/components/layout/chrome";
+import { MockModeBadge, UserMenu } from "@/components/layout/chrome";
 import { ErrorState } from "@/components/states/states";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Tooltip } from "@/components/ui/overlays";
@@ -53,15 +53,21 @@ function flatten(nodes: FileNode[], out: FileNode[] = []) {
   return out;
 }
 
+/** A 1px divider between panels with a wider invisible grab area; it turns violet on hover and while dragging. */
 function ResizeHandle({ direction }: { direction: "horizontal" | "vertical" }) {
   return (
     <PanelResizeHandle
       className={cn(
-        "relative bg-border transition-colors data-[resize-handle-state=drag]:bg-primary data-[resize-handle-state=hover]:bg-primary/60",
+        "relative z-10 shrink-0 bg-border outline-none transition-colors duration-150 data-[resize-handle-state=drag]:bg-primary data-[resize-handle-state=hover]:bg-primary/60",
         direction === "horizontal" ? "w-px after:absolute after:inset-y-0 after:-left-1 after:w-2" : "h-px after:absolute after:inset-x-0 after:-top-1 after:h-2",
       )}
     />
   );
+}
+
+/** Panel surface. Panels sit edge to edge; the resize handles draw the single line between them. */
+function PanelCard({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn("relative h-full min-h-0 overflow-hidden bg-card", className)}>{children}</div>;
 }
 
 function QuickOpen({ projectId, open, onOpenChange }: { projectId: string; open: boolean; onOpenChange: (o: boolean) => void }) {
@@ -168,7 +174,7 @@ function StatusBar({ projectId, onShortcuts, streamOpen }: { projectId: string; 
   const file = active && !isReviewTab(active) ? active : null;
 
   return (
-    <footer className="flex h-6 shrink-0 items-center gap-3 border-t border-border bg-surface px-2 text-[12px] text-muted-foreground">
+    <footer className="flex h-7 shrink-0 items-center border-t border-border gap-3.5 px-3.5 text-[12px] text-subtle-foreground [&_a:hover]:text-foreground [&_button:hover]:text-foreground">
       <button className="flex items-center gap-2 hover:text-foreground" onClick={() => setBottomTab("problems")} aria-label={`${errors} errors, ${warnings} warnings. Show problems`}>
         <span className="flex items-center gap-1"><AlertCircle className={cn("size-3", errors && "text-destructive")} aria-hidden />{errors}</span>
         <span className="flex items-center gap-1"><AlertTriangle className={cn("size-3", warnings && "text-warning")} aria-hidden />{warnings}</span>
@@ -316,17 +322,19 @@ export function IdeScreen({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden">
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-surface px-2">
+    // Follows the app theme: a soft frame (light grey / near-black) with each panel on its own card.
+    <div className="flex h-dvh flex-col overflow-hidden bg-surface-2 text-foreground dark:bg-background">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
         <Tooltip content="All projects">
-          <Link href="/projects" className="grid size-8 place-items-center rounded-sm hover:bg-surface-2" aria-label="All projects">
-            <LogoMark className="size-5" />
+          <Link href="/projects" className="grid size-8 place-items-center rounded-lg outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-ring" aria-label="All projects">
+            <LogoMark className="size-6 rounded-[7px] shadow-none" />
           </Link>
         </Tooltip>
-        <div className="flex min-w-0 items-center gap-2">
+        <span className="h-5 w-px bg-border" aria-hidden />
+        <div className="flex min-w-0 items-center gap-2 pl-1">
           {project.data ? (
             <>
-              <h1 className="truncate text-[14px] font-semibold">{project.data.name}</h1>
+              <h1 className="truncate text-[14px] font-semibold tracking-tight">{project.data.name}</h1>
               <span className="hidden lg:block"><ProjectTechBadges project={project.data} /></span>
             </>
           ) : (
@@ -338,9 +346,10 @@ export function IdeScreen({ projectId }: { projectId: string }) {
             ["agent", "AI agent"],
             ["builds", "Builds"],
             ["tests", "Tests"],
+            ["visual-editor", "Visual editor"],
             ["settings", "Settings"],
           ].map(([seg, label]) => (
-            <Link key={seg} href={`/projects/${projectId}/${seg}`} className="rounded-sm px-2 py-1 text-[13px] text-muted-foreground hover:bg-surface-2 hover:text-foreground">
+            <Link key={seg} href={`/projects/${projectId}/${seg}`} className="inline-flex h-8 items-center rounded-lg px-2.5 text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:bg-surface-3 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
               {label}
             </Link>
           ))}
@@ -354,7 +363,8 @@ export function IdeScreen({ projectId }: { projectId: string }) {
           {!readOnly ? (
             <Button
               size="sm"
-              variant="outline"
+              variant="secondary"
+              className="rounded-lg"
               loading={start.isPending}
               onClick={() =>
                 start.mutate(
@@ -372,7 +382,7 @@ export function IdeScreen({ projectId }: { projectId: string }) {
               <Hammer /> Build
             </Button>
           ) : null}
-          <span className="mx-1 h-5 w-px bg-border" aria-hidden />
+          <span className="mx-1.5 h-5 w-px bg-border" aria-hidden />
           <Tooltip content="Explorer" shortcut={`${MOD}+B`}>
             <Button variant={layout.explorer ? "secondary" : "subtle"} size="icon-sm" aria-pressed={layout.explorer} aria-label="Toggle explorer" onClick={() => toggle("explorer")}><PanelLeft /></Button>
           </Tooltip>
@@ -384,25 +394,26 @@ export function IdeScreen({ projectId }: { projectId: string }) {
               {layout.assistant ? <PanelRight /> : <Sparkles className="text-ai" />}
             </Button>
           </Tooltip>
-          <span className="mx-1 h-5 w-px bg-border" aria-hidden />
-          <ThemeToggle />
+          <span className="mx-1.5 h-5 w-px bg-border" aria-hidden />
           <UserMenu compact />
         </div>
       </header>
 
-      {readOnly ? <ApkAnalysisNotice className="m-2 mb-0 rounded-md" /> : null}
+      {readOnly ? <ApkAnalysisNotice className="rounded-none border-x-0 border-t-0" /> : null}
 
       <PanelGroup direction="horizontal" autoSaveId="apppilot.ide.h" className="min-h-0 flex-1">
         {layout.explorer ? (
           <>
             <Panel id="explorer" order={1} defaultSize={18} minSize={12} maxSize={35}>
-              <FileExplorer ref={explorerRef} projectId={projectId} readOnly={readOnly} />
+              <PanelCard>
+                <FileExplorer ref={explorerRef} projectId={projectId} readOnly={readOnly} />
+              </PanelCard>
             </Panel>
             <ResizeHandle direction="horizontal" />
           </>
         ) : null}
         <Panel id="center" order={2} minSize={30}>
-          <div className="relative size-full">
+          <div className="relative size-full overflow-hidden rounded-none">
           {/* The editor stays mounted (just hidden) while previewing, so tabs, unsaved buffers and cursor survive. */}
           <div
             id="view-panel-code"
@@ -414,13 +425,17 @@ export function IdeScreen({ projectId }: { projectId: string }) {
           >
           <PanelGroup direction="vertical" autoSaveId="apppilot.ide.v">
             <Panel id="editor" order={1} minSize={20}>
-              <EditorArea projectId={projectId} aiModifiedPaths={aiModifiedPaths} readOnly={readOnly} />
+              <PanelCard>
+                <EditorArea projectId={projectId} aiModifiedPaths={aiModifiedPaths} readOnly={readOnly} />
+              </PanelCard>
             </Panel>
             {layout.bottom ? (
               <>
                 <ResizeHandle direction="vertical" />
                 <Panel id="bottom" order={2} defaultSize={30} minSize={10} maxSize={70}>
-                  <BottomPanel projectId={projectId} readOnly={readOnly} />
+                  <PanelCard>
+                    <BottomPanel projectId={projectId} readOnly={readOnly} />
+                  </PanelCard>
                 </Panel>
               </>
             ) : null}
@@ -433,7 +448,9 @@ export function IdeScreen({ projectId }: { projectId: string }) {
           <>
             <ResizeHandle direction="horizontal" />
             <Panel id="assistant" order={3} defaultSize={26} minSize={18} maxSize={45}>
-              <AssistantPanel projectId={projectId} initialIntent={assistantIntent ?? undefined} isApk={readOnly} onClose={() => toggle("assistant", false)} />
+              <PanelCard>
+                <AssistantPanel projectId={projectId} initialIntent={assistantIntent ?? undefined} isApk={readOnly} onClose={() => toggle("assistant", false)} />
+              </PanelCard>
             </Panel>
           </>
         ) : null}

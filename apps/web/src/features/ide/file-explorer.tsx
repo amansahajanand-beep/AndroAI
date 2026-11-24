@@ -6,7 +6,13 @@ import {
   ChevronRight,
   ChevronsDownUp,
   Copy,
+  File as FileIcon,
+  FileCode,
   FileCode2,
+  FileCog,
+  FileImage,
+  FileJson,
+  FileText,
   FilePlus2,
   Folder,
   FolderOpen,
@@ -17,11 +23,12 @@ import {
   Sparkles,
   Trash2,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ErrorState, LoadingRows, EmptyState } from "@/components/states/states";
 import { Button } from "@/components/ui/button";
-import { ConfirmDialog, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, Segmented, Tooltip } from "@/components/ui/overlays";
+import { ConfirmDialog, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, Tooltip } from "@/components/ui/overlays";
 import { Input } from "@/components/ui/primitives";
 import { errorMessage } from "@/lib/api/errors";
 import { useFileMutations, useFileSearch, useFileTree } from "@/lib/api/hooks";
@@ -34,6 +41,25 @@ const GIT_MARK: Record<GitFileStatus, { letter: string; className: string; label
   deleted: { letter: "D", className: "text-git-deleted", label: "Deleted" },
   untracked: { letter: "U", className: "text-git-untracked", label: "Untracked" },
 };
+
+/** File-type icon and colour, so a tree full of files scans at a glance. */
+const FILE_KIND: { test: RegExp; icon: LucideIcon; color: string }[] = [
+  { test: /\.(kts?|kt)$/i, icon: FileCode2, color: "text-[#6d4fe0] dark:text-[#a99bff]" },
+  { test: /\.java$/i, icon: FileCode2, color: "text-[#b9600f] dark:text-[#f0a35e]" },
+  { test: /(\.gradle|gradle\.kts|gradlew(\.bat)?)$/i, icon: FileCog, color: "text-[#2a8048] dark:text-[#8fd19e]" },
+  { test: /\.xml$/i, icon: FileCode, color: "text-[#c2571f] dark:text-[#f59e6b]" },
+  { test: /\.json$/i, icon: FileJson, color: "text-[#9a7300] dark:text-[#f0c36e]" },
+  { test: /\.(md|txt)$/i, icon: FileText, color: "text-[#2c68cf] dark:text-[#7fb2ff]" },
+  { test: /\.(png|jpe?g|webp|gif|svg)$/i, icon: FileImage, color: "text-[#bd3577] dark:text-[#f28cb8]" },
+  { test: /\.(properties|pro|toml|ya?ml|cfg)$/i, icon: FileCog, color: "text-muted-foreground" },
+];
+function fileKind(name: string) {
+  return FILE_KIND.find((k) => k.test.test(name)) ?? { icon: FileIcon, color: "text-subtle-foreground" };
+}
+
+function countFiles(nodes: FileNode[]): number {
+  return nodes.reduce((n, x) => n + (x.type === "file" ? 1 : countFiles(x.children ?? [])), 0);
+}
 
 const INVALID_NAME = /[\\:*?"<>|]|^\.\.?$|\/\/|^\/|\/$/;
 
@@ -211,14 +237,16 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
         const git = n.gitStatus ? GIT_MARK[n.gitStatus] : null;
         const ai = isDir ? marks.ai.has(n.path) : n.aiModified;
         const isDirty = dirty.has(n.path);
+        const Kind = fileKind(n.name);
         return (
           <li key={n.path} role="treeitem" aria-expanded={isDir ? open : undefined} aria-selected={active === n.path}>
             <ContextMenu>
               <ContextMenuTrigger asChild>
                 <button
                   className={cn(
-                    "group flex h-6 w-full items-center gap-1.5 pr-2 text-left text-[14px] hover:bg-surface-2 focus-visible:outline-offset-[-2px]",
-                    active === n.path && "bg-primary-soft text-foreground",
+                    "group mx-1.5 flex h-7 w-[calc(100%-0.75rem)] items-center gap-1.5 rounded-md pr-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-surface-3/70 hover:text-foreground focus-visible:outline-offset-[-2px]",
+                    active === n.path &&
+                      "relative bg-surface-3 text-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-primary",
                   )}
                   style={{ paddingLeft: 8 + depth * 12 }}
                   onClick={() => (isDir ? toggle(n.path) : openFile(projectId, n.path))}
@@ -227,12 +255,12 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
                   {isDir ? (
                     <>
                       <ChevronRight className={cn("size-3 shrink-0 text-subtle-foreground transition-transform", open && "rotate-90")} aria-hidden />
-                      {open ? <FolderOpen className="size-3.5 shrink-0 text-muted-foreground" aria-hidden /> : <Folder className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
+                      {open ? <FolderOpen className="size-3.5 shrink-0 text-primary/80" aria-hidden /> : <Folder className="size-3.5 shrink-0 text-primary/70" aria-hidden />}
                     </>
                   ) : (
                     <>
                       <span className="w-3 shrink-0" />
-                      <FileCode2 className={cn("size-3.5 shrink-0", ai ? "text-ai" : "text-subtle-foreground")} aria-hidden />
+                      <Kind.icon className={cn("size-3.5 shrink-0", Kind.color)} aria-hidden />
                     </>
                   )}
                   <span
@@ -273,7 +301,20 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
                 ) : null}
               </ContextMenuContent>
             </ContextMenu>
-            {isDir && open ? <ul role="group">{renderNodes(n.children ?? [], depth + 1, n.path)}</ul> : null}
+            {isDir && open ? (
+              <ul
+                role="group"
+                // A faint guide line under the folder's chevron shows the nesting depth.
+                style={{
+                  backgroundImage: "linear-gradient(var(--border), var(--border))",
+                  backgroundSize: "1px 100%",
+                  backgroundRepeat: "no-repeat",
+                  backgroundPosition: `${20 + depth * 12}px 0`,
+                }}
+              >
+                {renderNodes(n.children ?? [], depth + 1, n.path)}
+              </ul>
+            ) : null}
           </li>
         );
       })}
@@ -287,9 +328,12 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
   }, [content.data]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
-      <div className="flex h-9 shrink-0 items-center justify-between gap-1 border-b border-border pl-3 pr-1.5">
-        <h2 className="text-[13px] font-semibold text-muted-foreground">Explorer</h2>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-10 shrink-0 items-center justify-between gap-1 border-b border-border pl-3.5 pr-2">
+        <h2 className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
+          Explorer
+          {tree.data ? <span className="rounded-full bg-surface-3 px-1.5 text-[11px] font-medium tabular-nums text-muted-foreground">{countFiles(tree.data)}</span> : null}
+        </h2>
         <div className="flex items-center">
           {!readOnly ? (
             <>
@@ -302,6 +346,28 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
         </div>
       </div>
       <div className="grid shrink-0 gap-1.5 border-b border-border p-2">
+        <div role="tablist" aria-label="Search mode" className="grid grid-cols-2 gap-0.5 rounded-lg bg-surface-2 p-0.5">
+          {(
+            [
+              { value: "names", label: "Names" },
+              { value: "content", label: "Contents" },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.value}
+              type="button"
+              role="tab"
+              aria-selected={mode === t.value}
+              onClick={() => setMode(t.value)}
+              className={cn(
+                "h-7 rounded-md text-[12.5px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                mode === t.value ? "bg-surface-3 text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.3)]" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
         <div className="relative">
           <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-subtle-foreground" aria-hidden />
           <Input
@@ -311,7 +377,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
             onKeyDown={(e) => e.key === "Escape" && setQuery("")}
             placeholder={mode === "names" ? "Filter files" : "Search in files"}
             aria-label={mode === "names" ? "Filter files by name" : "Search file contents"}
-            className="h-7 pl-7 pr-7 text-[13px]"
+            className="h-8 rounded-lg border-transparent bg-surface-2 pl-7 pr-7 text-[13px] hover:border-transparent"
           />
           {query ? (
             <button className="absolute right-1.5 top-1/2 -translate-y-1/2 text-subtle-foreground hover:text-foreground" aria-label="Clear search" onClick={() => setQuery("")}>
@@ -319,7 +385,6 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
             </button>
           ) : null}
         </div>
-        <Segmented aria-label="Search mode" value={mode} onChange={setMode} className="w-full [&>button]:flex-1 [&>button]:justify-center [&>button]:text-[13px]" options={[{ value: "names", label: "Names" }, { value: "content", label: "Contents" }]} />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto py-1">
@@ -331,11 +396,17 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
               <li className="px-2 text-[12px] text-muted-foreground">{content.data?.length} results in {grouped.length} files</li>
               {grouped.map(([path, hits]) => (
                 <li key={path}>
-                  <p className="truncate px-2 font-mono text-[12px] text-muted-foreground" title={path}>{path}</p>
+                  <p className="flex items-center gap-1.5 truncate px-2 font-mono text-[12px] text-muted-foreground" title={path}>
+                    {(() => {
+                      const K = fileKind(path);
+                      return <K.icon className={cn("size-3.5 shrink-0", K.color)} aria-hidden />;
+                    })()}
+                    <span className="truncate">{path}</span>
+                  </p>
                   <ul>
                     {hits.map((h) => (
                       <li key={`${h.line}:${h.column}`}>
-                        <button className="flex w-full gap-2 rounded-sm px-2 py-0.5 text-left font-mono text-[13px] hover:bg-surface-2" onClick={() => openFile(projectId, path, { line: h.line, column: h.column })}>
+                        <button className="flex w-full gap-2 rounded-md px-2 py-0.5 text-left font-mono text-[12.5px] transition-colors hover:bg-surface-3/70" onClick={() => openFile(projectId, path, { line: h.line, column: h.column })}>
                           <span className="w-7 shrink-0 text-right text-subtle-foreground">{h.line}</span>
                           <span className="truncate">{h.preview}</span>
                         </button>

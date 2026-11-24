@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import type { AgentTask, Project } from "@apppilot/contracts";
-import { FileArchive, Package, Plus, Sparkle, type LucideIcon } from "lucide-react";
+import { Pin } from "lucide-react";
+import { Avatar, Skeleton } from "@/components/ui/primitives";
 import { cn, formatRelative } from "@/lib/utils";
-import { initialsOf, previewStateOf, type PreviewState } from "./project-preview";
+import { SOURCE_META } from "./project-meta";
+import { ProjectPreview, previewStateOf, type PreviewState } from "./project-preview";
 
 /** Status colours: the dot and the text share one tone. */
 const STATUS_TONE: Record<PreviewState["kind"], { dot: string; text: string }> = {
@@ -13,21 +15,6 @@ const STATUS_TONE: Record<PreviewState["kind"], { dot: string; text: string }> =
   failed: { dot: "bg-destructive", text: "text-destructive" },
   succeeded: { dot: "bg-success", text: "text-success" },
   idle: { dot: "bg-subtle-foreground/60", text: "text-subtle-foreground" },
-};
-
-/** Two-letter monogram: initials for multi-word names, first two letters otherwise ("Trailhead" → "TH"). */
-function monogramOf(name: string) {
-  const words = name.trim().split(/s+/).filter(Boolean);
-  if (words.length > 1) return initialsOf(name);
-  const w = words[0] ?? "";
-  return (w.slice(0, 1) + (w.slice(1).match(/[A-Z]/)?.[0] ?? w.slice(1, 2))).toUpperCase();
-}
-
-/** Short source labels with their icon, as shown in the card meta row. */
-const SOURCE: Record<Project["source"], { label: string; icon: LucideIcon }> = {
-  prompt: { label: "From prompt", icon: Sparkle },
-  android_zip: { label: "Imported", icon: FileArchive },
-  apk: { label: "APK analysis", icon: Package },
 };
 
 /** One small status for the card: agent activity first, then the last build. */
@@ -57,82 +44,116 @@ export function CardStatus({ project, task }: { project: Project; task?: AgentTa
   );
 }
 
-/**
- * The project card shared by the Projects page and the dashboard: violet icon tile, name and
- * package, one-line description, source + tech chips, then a divider and a coloured status.
- * `actions` renders a menu top-right (hidden until hover/focus, always shown on touch).
- */
-export function ProjectCard({ project, task, index, actions }: { project: Project; task?: AgentTask; index: number; actions?: React.ReactNode }) {
-  const source = SOURCE[project.source];
-  const apk = project.isApkAnalysis;
+/** Pin/unpin toggle. Always visible once pinned; otherwise on hover/focus (and always on touch). */
+export function PinButton({ pinned, name, onToggle, className }: { pinned: boolean; name: string; onToggle: () => void; className?: string }) {
   return (
-    <article
-      style={{ "--i": index } as React.CSSProperties}
-      className="group relative flex min-w-0 flex-col rounded-[12px] border border-border bg-card transition-[border-color,background-color,box-shadow] duration-150 hover:border-border-strong hover:shadow-[0_1px_2px_rgb(21_17_43/0.06)] dark:hover:bg-surface-2"
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onToggle();
+      }}
+      aria-pressed={pinned}
+      aria-label={pinned ? `Unpin ${name}` : `Pin ${name} to the top`}
+      title={pinned ? "Unpin" : "Pin to top"}
+      className={cn(
+        "grid size-7 place-items-center rounded-md outline-none transition-[opacity,background-color,color] duration-150 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring",
+        pinned
+          ? "bg-foreground text-background opacity-100 hover:bg-foreground/85"
+          : "bg-background/80 text-muted-foreground opacity-0 backdrop-blur hover:text-foreground group-hover:opacity-100 [@media(hover:none)]:opacity-100",
+        className,
+      )}
     >
-      <div className="flex flex-1 flex-col px-5 pt-4">
-        <div className={cn("flex items-center gap-3", actions ? "pr-8" : undefined)}>
-          <span
-            aria-hidden
-            className={cn(
-              "grid size-8 shrink-0 place-items-center rounded-sm text-[12px] font-semibold tracking-wide",
-              apk ? "bg-warning-soft text-warning" : "bg-primary-soft text-primary",
-            )}
-          >
-            {apk ? <Package className="size-4" /> : monogramOf(project.name)}
-          </span>
-          <Link href={`/projects/${project.id}/ide`} className="min-w-0 rounded-sm outline-none after:absolute after:inset-0 after:z-0 after:rounded-[12px] focus-visible:after:ring-2 focus-visible:after:ring-ring">
-            <h3 className="truncate text-[15px] font-semibold leading-tight">{project.name}</h3>
-            {project.packageName ? <p className="truncate font-mono text-[12px] leading-snug text-subtle-foreground">{project.packageName}</p> : null}
-          </Link>
-        </div>
+      {pinned ? <Pin className="size-3.5 fill-current" aria-hidden /> : <Pin className="size-3.5" aria-hidden />}
+    </button>
+  );
+}
+
+/**
+ * The Projects page card (Lovable-style): a large generated preview with the live status on it,
+ * then the owner's avatar, the project name and a date line. The description is the tooltip.
+ * `actions` renders a menu top-right on the preview (shown on hover/focus, always on touch).
+ */
+export function ProjectCard({
+  project,
+  task,
+  index,
+  owner,
+  meta,
+  actions,
+  pinned = false,
+  onTogglePin,
+}: {
+  project: Project;
+  task?: AgentTask;
+  index: number;
+  owner?: { name: string; avatarUrl?: string | null };
+  /** The date line under the name, e.g. "Created 3 days ago". */
+  meta?: string;
+  actions?: React.ReactNode;
+  pinned?: boolean;
+  onTogglePin?: () => void;
+}) {
+  const state = previewStateOf(project, task);
+  const source = SOURCE_META[project.source];
+  return (
+    <article style={{ "--i": index } as React.CSSProperties} title={project.description || undefined} className="group relative min-w-0">
+      <div className="relative aspect-[16/10] overflow-hidden rounded-xl border border-border transition-[border-color,box-shadow] duration-300 group-hover:border-border-strong group-hover:shadow-[0_12px_32px_-16px_rgb(0_0_0/0.35)] group-focus-within:border-border-strong">
+        <ProjectPreview project={project} className="h-full" />
+        {onTogglePin ? <PinButton pinned={pinned} name={project.name} onToggle={onTogglePin} className="absolute left-2 top-2 z-10" /> : null}
         {actions ? (
-          <div className="absolute right-3 top-3 z-10 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 has-data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100">
+          <div className="absolute right-2 top-2 z-10 rounded-md bg-background/80 opacity-0 backdrop-blur transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 has-data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100">
             {actions}
           </div>
         ) : null}
-
-        <p className="mt-2.5 truncate text-[13.5px] leading-normal text-muted-foreground" title={project.description || undefined}>
-          {project.description}
-        </p>
-
-        <div className="mt-auto flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1.5 pb-3.5 pt-5">
-          <span className={cn("inline-flex shrink-0 items-center gap-1.5 text-[12.5px]", apk ? "font-medium text-warning" : "text-subtle-foreground")}>
-            <source.icon className={cn("size-3.5", apk ? "text-warning" : "text-primary")} aria-hidden />
-            {source.label}
-          </span>
-          <span aria-hidden className="mx-1 size-[3px] shrink-0 rounded-full bg-border-strong" />
-          {[project.language === "kotlin" ? "Kotlin" : "Java", project.uiToolkit === "compose" ? "Compose" : "XML views"].map((t) => (
-            <span key={t} className="shrink-0 rounded-[5px] border border-border bg-surface-2 px-1.5 py-px text-[12px] font-medium text-foreground/80">
-              {t}
-            </span>
-          ))}
-        </div>
       </div>
 
-      <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-3 text-[12.5px]">
-        <CardStatus project={project} task={task} />
-        <span className="shrink-0 text-subtle-foreground">Updated {formatRelative(project.updatedAt)}</span>
+      <div className="mt-3 flex min-w-0 items-start gap-2.5 px-0.5">
+        {owner ? <Avatar name={owner.name} src={owner.avatarUrl} className="mt-0.5 size-7 ring-0 [&_span]:text-[11px]" /> : null}
+        <div className="min-w-0 flex-1">
+          <Link
+            href={`/projects/${project.id}/ide`}
+            className="block min-w-0 rounded-sm outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:after:ring-2 focus-visible:after:ring-ring"
+          >
+            <h3 className="truncate text-[14.5px] font-semibold leading-snug">{project.name}</h3>
+          </Link>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12.5px] text-subtle-foreground">
+            {state.kind !== "idle" ? (
+              <>
+                <CardStatus project={project} task={task} />
+                <span aria-hidden>·</span>
+              </>
+            ) : null}
+            {project.isApkAnalysis ? (
+              <>
+                <span className="inline-flex shrink-0 items-center gap-1 font-medium text-warning">
+                  <source.icon className="size-3" aria-hidden /> APK
+                </span>
+                <span aria-hidden>·</span>
+              </>
+            ) : null}
+            <span className="truncate">{meta ?? `Edited ${formatRelative(project.updatedAt)}`}</span>
+            {owner ? <span className="sr-only">, owner {owner.name}</span> : null}
+          </div>
+        </div>
       </div>
     </article>
   );
 }
 
-export function NewProjectCard({ index }: { index: number }) {
+/** Loading placeholder with the card's shape. */
+export function ProjectCardSkeleton({ style }: { style?: React.CSSProperties }) {
   return (
-    <Link
-      href="/projects/new"
-      style={{ "--i": index } as React.CSSProperties}
-      className="group flex min-h-44 flex-col items-center justify-center gap-1.5 rounded-[12px] border border-dashed border-border-strong p-5 text-center transition-colors duration-150 hover:border-primary/50 hover:bg-primary-soft/40"
-    >
-      <span className="mb-1 grid size-8 place-items-center rounded-sm bg-primary-soft text-primary">
-        <Plus className="size-4" aria-hidden />
-      </span>
-      <span className="text-[14px] font-semibold text-foreground">New project</span>
-      <span className="text-[12.5px] text-subtle-foreground">Start from a prompt, a ZIP or an APK.</span>
-    </Link>
+    <div style={style} aria-hidden>
+      <Skeleton className="aspect-[16/10] rounded-xl" />
+      <div className="mt-3 flex gap-2.5">
+        <Skeleton className="size-7 rounded-full" />
+        <div className="grid flex-1 gap-1.5 pt-0.5">
+          <Skeleton className="h-3.5 w-2/3" />
+          <Skeleton className="h-3 w-1/3" />
+        </div>
+      </div>
+    </div>
   );
 }
-
-/** Loading placeholder matching the card size. */
-export const PROJECT_CARD_SKELETON = "h-44 rounded-[12px]";

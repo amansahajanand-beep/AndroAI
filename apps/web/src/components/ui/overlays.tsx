@@ -33,13 +33,13 @@ export function DialogContent({
 }: React.ComponentProps<typeof DialogPrimitive.Content> & { side?: "right" }) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
+      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
       <DialogPrimitive.Content
         className={cn(
-          "fixed z-50 border border-border-strong bg-popover text-popover-foreground shadow-pop focus:outline-none",
+          "fixed z-50 border border-border bg-popover text-popover-foreground shadow-pop focus:outline-none",
           side === "right"
             ? "inset-y-0 right-0 flex h-full w-full max-w-2xl flex-col border-y-0 border-r-0 data-[state=open]:animate-in data-[state=open]:slide-in-from-right"
-            : "left-1/2 top-1/2 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl p-6 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+            : "left-1/2 top-1/2 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl p-6 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
           className,
         )}
         {...props}
@@ -62,7 +62,7 @@ export function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLD
   return <div className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)} {...props} />;
 }
 export function DialogTitle({ className, ...props }: React.ComponentProps<typeof DialogPrimitive.Title>) {
-  return <DialogPrimitive.Title className={cn("text-base font-semibold", className)} {...props} />;
+  return <DialogPrimitive.Title className={cn("text-[17px] font-semibold tracking-tight", className)} {...props} />;
 }
 export function DialogDescription({
   className,
@@ -116,9 +116,9 @@ export function ConfirmDialog({
 /* ---------------- Menus ---------------- */
 
 const menuContent =
-  "z-50 min-w-40 overflow-hidden rounded-lg border border-border-strong bg-popover p-1.5 text-popover-foreground shadow-pop data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95";
+  "z-50 min-w-40 overflow-hidden rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-pop data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95";
 const menuItem =
-  "relative flex cursor-default select-none items-center gap-2 rounded-md px-2.5 py-2 text-[14px] outline-none transition-colors data-[highlighted]:bg-primary-soft data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[variant=destructive]:text-destructive [&_svg]:size-3.5 [&_svg]:text-muted-foreground data-[variant=destructive]:[&_svg]:text-destructive";
+  "relative flex cursor-default select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-[14px] outline-none transition-colors data-[highlighted]:bg-surface-3 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[variant=destructive]:text-destructive [&_svg]:size-3.5 [&_svg]:text-muted-foreground data-[variant=destructive]:[&_svg]:text-destructive";
 
 export const DropdownMenu = DropdownPrimitive.Root;
 export const DropdownMenuTrigger = DropdownPrimitive.Trigger;
@@ -147,6 +147,31 @@ export function DropdownMenuLabel({ className, ...props }: React.ComponentProps<
 }
 export function DropdownMenuSeparator({ className, ...props }: React.ComponentProps<typeof DropdownPrimitive.Separator>) {
   return <DropdownPrimitive.Separator className={cn("-mx-1 my-1 h-px bg-border", className)} {...props} />;
+}
+
+/** A toggle row in a dropdown (multi-select filters). */
+export function DropdownMenuCheckboxItem({ className, children, ...props }: React.ComponentProps<typeof DropdownPrimitive.CheckboxItem>) {
+  return (
+    <DropdownPrimitive.CheckboxItem className={cn(menuItem, "pr-8", className)} {...props}>
+      {children}
+      <DropdownPrimitive.ItemIndicator className="absolute right-2.5 flex items-center">
+        <Check className="!text-foreground" />
+      </DropdownPrimitive.ItemIndicator>
+    </DropdownPrimitive.CheckboxItem>
+  );
+}
+
+/** Single-choice rows in a dropdown (sort, layout). */
+export const DropdownMenuRadioGroup = DropdownPrimitive.RadioGroup;
+export function DropdownMenuRadioItem({ className, children, ...props }: React.ComponentProps<typeof DropdownPrimitive.RadioItem>) {
+  return (
+    <DropdownPrimitive.RadioItem className={cn(menuItem, "pr-8", className)} {...props}>
+      {children}
+      <DropdownPrimitive.ItemIndicator className="absolute right-2.5 flex items-center">
+        <Check className="!text-foreground" />
+      </DropdownPrimitive.ItemIndicator>
+    </DropdownPrimitive.RadioItem>
+  );
 }
 
 export const ContextMenu = ContextMenuPrimitive.Root;
@@ -191,10 +216,10 @@ export function Tooltip({
         <TooltipPrimitive.Content
           side={side}
           sideOffset={6}
-          className="z-50 flex max-w-xs items-center gap-2 rounded-md border border-border-strong bg-popover px-2.5 py-1.5 text-[13px] text-popover-foreground shadow-pop data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0"
+          className="z-50 flex max-w-xs items-center gap-2 rounded-md bg-foreground px-2 py-1 text-[12.5px] font-medium text-background shadow-pop data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0"
         >
           {content}
-          {shortcut ? <span className="font-mono text-[11px] text-muted-foreground">{shortcut}</span> : null}
+          {shortcut ? <span className="font-mono text-[11px] text-background/60">{shortcut}</span> : null}
         </TooltipPrimitive.Content>
       </TooltipPrimitive.Portal>
     </TooltipPrimitive.Root>
@@ -217,7 +242,7 @@ export function PopoverContent({
         sideOffset={sideOffset}
         align={align}
         className={cn(
-          "z-50 w-72 rounded-lg border border-border-strong bg-popover p-3 text-popover-foreground shadow-pop outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0",
+          "z-50 w-72 rounded-xl border border-border bg-popover p-3 text-popover-foreground shadow-pop outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0",
           className,
         )}
         {...props}
@@ -243,7 +268,7 @@ export function TabsTrigger({ className, ...props }: React.ComponentProps<typeof
     <TabsPrimitive.Trigger
       className={cn(
         "-mb-px inline-flex h-8 items-center gap-1.5 border-b-2 border-transparent px-2.5 text-[14px] text-muted-foreground transition-colors hover:text-foreground",
-        "data-[state=active]:border-primary data-[state=active]:text-foreground [&_svg]:size-3.5",
+        "data-[state=active]:border-foreground data-[state=active]:text-foreground [&_svg]:size-3.5",
         className,
       )}
       {...props}
@@ -281,7 +306,7 @@ export function Select<T extends string>({
         id={id}
         aria-label={ariaLabel}
         className={cn(
-          "flex h-9 w-full items-center justify-between gap-2 rounded-sm border border-input bg-surface/70 px-3 text-[14px] transition-[border-color,box-shadow] hover:border-border-strong data-[placeholder]:text-subtle-foreground focus-visible:border-primary focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/20 disabled:opacity-50",
+          "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-surface px-3 text-[14px] transition-[border-color,box-shadow] hover:border-subtle-foreground/50 data-[placeholder]:text-subtle-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/25 disabled:opacity-50",
           className,
         )}
       >
@@ -328,7 +353,7 @@ export function Segmented<T extends string>({
   className?: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={ariaLabel} className={cn("inline-flex w-fit rounded-md border border-input bg-surface/70 p-0.5", className)}>
+    <div role="radiogroup" aria-label={ariaLabel} className={cn("inline-flex w-fit rounded-full border border-border-strong bg-surface p-0.5", className)}>
       {options.map((o) => {
         const active = o.value === value;
         return (
@@ -340,8 +365,8 @@ export function Segmented<T extends string>({
             title={o.description}
             onClick={() => onChange(o.value)}
             className={cn(
-              "inline-flex h-8 items-center gap-1.5 rounded-[7px] px-3 text-[14px] transition-colors [&_svg]:size-3.5",
-              active ? "bg-primary-soft text-foreground ring-1 ring-primary/30" : "text-muted-foreground hover:text-foreground",
+              "inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[14px] transition-colors [&_svg]:size-3.5",
+              active ? "bg-surface-3 font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
             )}
           >
             {o.label}

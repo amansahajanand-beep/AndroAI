@@ -16,7 +16,7 @@ import { MOD } from "./shortcuts";
 function Breadcrumbs({ path, aiModified, onToggleDiff, showDiff, dirty }: { path: string; aiModified: boolean; onToggleDiff: () => void; showDiff: boolean; dirty: boolean }) {
   const parts = path.split("/");
   return (
-    <div className="flex h-7 items-center gap-1 border-b border-border px-3 text-[13px] text-muted-foreground">
+    <div className="flex h-8 items-center gap-1 border-b border-border px-3.5 text-[12.5px] text-muted-foreground">
       <nav aria-label="File path" className="flex min-w-0 items-center gap-1 overflow-hidden">
         {parts.map((p, i) => (
           <span key={i} className="flex shrink-0 items-center gap-1 last:shrink">
@@ -80,7 +80,7 @@ export function EditorArea({ projectId, aiModifiedPaths, readOnly }: { projectId
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div role="tablist" aria-label="Open files" className="flex h-9 shrink-0 items-stretch overflow-x-auto border-b border-border bg-surface">
+      <div role="tablist" aria-label="Open files" className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
         {open.map((t) => {
           const review = isReviewTab(t);
           const dirty = isDirty(t);
@@ -97,14 +97,14 @@ export function EditorArea({ projectId, aiModifiedPaths, readOnly }: { projectId
                   onKeyDown={(e) => e.key === "Enter" && setActive(projectId, t)}
                   onAuxClick={(e) => e.button === 1 && requestClose(t)}
                   className={cn(
-                    "group flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-border pl-3 pr-1.5 text-[14px]",
-                    selected ? "bg-background text-foreground shadow-[inset_0_2px_0_var(--color-primary)]" : "text-muted-foreground hover:bg-surface-2",
+                    "group flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg pl-2.5 pr-1 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                    selected ? "bg-surface-3 text-foreground" : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
                   )}
                 >
                   {review ? <Sparkles className="size-3.5 text-ai" aria-hidden /> : <FileCode2 className={cn("size-3.5", aiModifiedPaths.has(t) ? "text-ai" : "text-subtle-foreground")} aria-hidden />}
                   <span className="max-w-44 truncate">{review ? "Review changes" : basename(t)}</span>
                   <button
-                    className="relative grid size-5 place-items-center rounded-sm hover:bg-surface-3"
+                    className="relative grid size-5 place-items-center rounded-md transition-colors hover:bg-surface-3"
                     aria-label={dirty ? `${basename(t)} has unsaved changes. Close` : `Close ${review ? "review" : basename(t)}`}
                     onClick={(e) => {
                       e.stopPropagation();

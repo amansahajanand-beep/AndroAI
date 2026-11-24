@@ -5,7 +5,7 @@ import { useState } from "react";
 import type { Build, BuildOutputType, BuildVariant } from "@apppilot/contracts";
 import { Bot, Download, Hammer, RotateCw, Square, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { PageBody, PageHeader } from "@/components/layout/page";
+import { PageBody } from "@/components/layout/page";
 import { LogViewer } from "@/components/logs/log-viewer";
 import { EmptyState, ErrorState, LoadingRows, QueryView } from "@/components/states/states";
 import { BuildStatusBadge } from "@/components/status/status-badge";
@@ -177,11 +177,10 @@ export function BuildCenterScreen({ projectId }: { projectId: string }) {
 
   return (
     <PageBody>
-      <PageHeader
-        title="Builds"
-        description="Every Gradle build for this project, from you or the agent."
-        actions={<NewBuild projectId={projectId} disabled={project.data?.isApkAnalysis} />}
-      />
+      {/* The project tabs already name this page; only its action sits here. */}
+      <div className="mb-4 flex justify-end">
+        <NewBuild projectId={projectId} disabled={project.data?.isApkAnalysis} />
+      </div>
       <Card>
         <QueryView
           query={builds}

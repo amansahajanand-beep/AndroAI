@@ -172,7 +172,7 @@ export function RegisterForm() {
     if (Object.values(next).some(Boolean)) return;
     register.mutate(
       { ...form, name: form.name.trim(), acceptTerms: true },
-      { onSuccess: () => router.replace("/") },
+      { onSuccess: () => router.replace(AFTER_LOGIN) },
     );
   };
 

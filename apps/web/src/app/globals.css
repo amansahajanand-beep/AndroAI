@@ -15,21 +15,25 @@
 :root,
 .dark {
   color-scheme: dark;
-  --background: #07060f;
-  --foreground: #f1effb;
-  --surface: #0f0d1c;
-  --surface-2: #171428;
-  --surface-3: #211d38;
-  --card: #0f0d1c;
+  /* App sidebar and the frame around the page: dark in both themes (.light does not override it). */
+  --sidebar-bg: #141317;
+
+  /* Neutral near-black surfaces (violet is reserved for brand and accents). */
+  --background: #0c0b10;
+  --foreground: #f4f3f8;
+  --surface: #121117;
+  --surface-2: #19181f;
+  --surface-3: #222129;
+  --card: #141319;
   --card-foreground: var(--foreground);
-  --popover: #171428;
+  --popover: #19181f;
   --popover-foreground: var(--foreground);
-  --muted: #171428;
-  --muted-foreground: #9a97b8;
-  --subtle-foreground: #7c7999;
-  --border: #2a2543;
-  --border-strong: #3a3458;
-  --input: #332d50;
+  --muted: #19181f;
+  --muted-foreground: #a3a1b0;
+  --subtle-foreground: #8a8898;
+  --border: #26242f;
+  --border-strong: #34323f;
+  --input: #34323f;
   --ring: #8b7cff;
 
   /* Aurora brand: electric indigo, violet, soft violet. Fills, glows, headlines. */
@@ -43,10 +47,10 @@
   --primary: #8b7cff;
   --primary-foreground: #ffffff;
   --primary-soft: rgb(139 124 255 / 0.15);
-  --secondary: #171428;
-  --secondary-foreground: #f1effb;
-  --accent: #171428;
-  --accent-foreground: #f1effb;
+  --secondary: #19181f;
+  --secondary-foreground: #f4f3f8;
+  --accent: #19181f;
+  --accent-foreground: #f4f3f8;
 
   /* Signature: anything an AI agent touched carries the agent colour (violet). */
   --ai: #c084fc;
@@ -69,28 +73,28 @@
   --git-deleted: #f87171;
   --git-untracked: #a78bfa;
 
-  --scrollbar: #34304f;
-  --elev-card: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 8px 24px -12px rgb(0 0 0 / 0.6);
-  --elev-pop: 0 24px 60px -20px rgb(0 0 0 / 0.75), 0 0 0 1px rgb(255 255 255 / 0.04);
+  --scrollbar: #34323f;
+  --elev-card: 0 1px 2px rgb(0 0 0 / 0.3);
+  --elev-pop: 0 16px 48px -16px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.04);
 }
 
 .light {
   color-scheme: light;
-  --background: #f7f6fd;
-  --foreground: #15112b;
+  --background: #fbfbfd;
+  --foreground: #16141f;
   --surface: #ffffff;
-  --surface-2: #f0eefa;
-  --surface-3: #e6e3f6;
+  --surface-2: #f4f3f7;
+  --surface-3: #ebeaf0;
   --card: var(--surface);
   --card-foreground: var(--foreground);
   --popover: #ffffff;
   --popover-foreground: var(--foreground);
-  --muted: #f0eefa;
-  --muted-foreground: #5e5a7e;
-  --subtle-foreground: #706b8c;
-  --border: #e3e0f4;
-  --border-strong: #cdc8e6;
-  --input: #cdc8e2;
+  --muted: #f4f3f7;
+  --muted-foreground: #5d5a6e;
+  --subtle-foreground: #6c6980;
+  --border: #e7e5ee;
+  --border-strong: #d6d3e2;
+  --input: #d6d3e2;
   --ring: #5b46e8;
 
   --brand-1: #5b46e8;
@@ -103,10 +107,10 @@
   --primary: #5b46e8;
   --primary-foreground: #ffffff;
   --primary-soft: rgb(91 70 232 / 0.1);
-  --secondary: #ebe8f8;
-  --secondary-foreground: #15112b;
-  --accent: #ebe8f8;
-  --accent-foreground: #15112b;
+  --secondary: #f1f0f5;
+  --secondary-foreground: #16141f;
+  --accent: #f1f0f5;
+  --accent-foreground: #16141f;
 
   --ai: #7c3aed;
   --ai-foreground: #ffffff;
@@ -127,9 +131,9 @@
   --git-deleted: #c2342b;
   --git-untracked: #a78bfa;
 
-  --scrollbar: #ccc7e3;
-  --elev-card: 0 1px 2px rgb(40 30 100 / 0.05), 0 10px 28px -14px rgb(60 40 160 / 0.18);
-  --elev-pop: 0 24px 60px -24px rgb(40 30 100 / 0.35), 0 0 0 1px rgb(40 30 100 / 0.05);
+  --scrollbar: #d6d3e2;
+  --elev-card: 0 1px 2px rgb(22 20 31 / 0.05);
+  --elev-pop: 0 16px 48px -18px rgb(22 20 31 / 0.25), 0 0 0 1px rgb(22 20 31 / 0.05);
 }
 
 /*
@@ -409,25 +413,51 @@
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(40% 70% at 12% 0%, color-mix(in oklab, var(--brand-1) 22%, transparent), transparent 70%),
-    radial-gradient(34% 60% at 88% 0%, color-mix(in oklab, var(--brand-3) 14%, transparent), transparent 70%);
+    radial-gradient(40% 70% at 12% 0%, color-mix(in oklab, var(--brand-1) 10%, transparent), transparent 70%),
+    radial-gradient(34% 60% at 88% 0%, color-mix(in oklab, var(--brand-3) 7%, transparent), transparent 70%);
 }
 
-/* Dashboard discovery panel: the soft violet glow it rises out of, and its lifted top edge. */
-.discovery-glow {
-  background:
-    radial-gradient(48% 60% at 50% 72%, color-mix(in oklab, var(--brand-1) 34%, transparent), transparent 72%),
-    radial-gradient(30% 45% at 20% 80%, color-mix(in oklab, var(--brand-3) 20%, transparent), transparent 70%),
-    radial-gradient(30% 45% at 80% 80%, color-mix(in oklab, var(--brand-3) 20%, transparent), transparent 70%);
+/* App pages use one clean sans for headings too; the display face stays on the logo, landing and auth. */
+#main :is(h1, h2, h3, .font-display) {
+  font-family: var(--font-sans);
+  letter-spacing: -0.025em;
 }
-.light .discovery-glow {
+
+/*
+ * Dashboard hero: a full-bleed glow the build prompt sits on, dark in both themes.
+ * Charcoal top melting into a blue / purple / pink glow; every layer is a soft blend, no hard stops.
+ * The first layer fades the bottom into the page background (var(--background) resolves to the
+ * page theme here; the hero's content is scoped .dark in the markup), so there is no edge behind
+ * the floating discovery panel.
+ */
+.dash-hero {
+  --hero-fg: #ffffff;
+  --hero-chip-bg: rgb(12 11 16 / 0.42);
+  --hero-chip-border: rgb(255 255 255 / 0.16);
+  --hero-chip-fg: rgb(255 255 255 / 0.86);
   background:
-    radial-gradient(48% 60% at 50% 72%, color-mix(in oklab, var(--brand-1) 22%, transparent), transparent 72%),
-    radial-gradient(30% 45% at 20% 80%, color-mix(in oklab, var(--brand-3) 26%, transparent), transparent 70%),
-    radial-gradient(30% 45% at 80% 80%, color-mix(in oklab, var(--brand-3) 26%, transparent), transparent 70%);
+    linear-gradient(
+      180deg,
+      transparent 68%,
+      color-mix(in oklab, var(--background) 18%, transparent) 76%,
+      color-mix(in oklab, var(--background) 55%, transparent) 86%,
+      color-mix(in oklab, var(--background) 85%, transparent) 94%,
+      var(--background) 100%
+    ),
+    linear-gradient(180deg, #1c1c1f 0%, rgb(28 28 31 / 0.92) 14%, rgb(28 28 31 / 0.55) 28%, transparent 46%),
+    radial-gradient(36% 52% at 50% 56%, rgb(30 34 70 / 0.95) 0%, rgb(42 56 130 / 0.6) 42%, rgb(70 90 200 / 0.2) 64%, transparent 80%),
+    radial-gradient(60% 42% at 0% 50%, rgb(72 112 246 / 0.95) 0%, rgb(90 110 240 / 0.5) 45%, transparent 75%),
+    radial-gradient(60% 42% at 100% 50%, rgb(72 112 246 / 0.95) 0%, rgb(90 110 240 / 0.5) 45%, transparent 75%),
+    radial-gradient(130% 70% at 50% 102%, #ff2e6e 0%, #ff4d9a 20%, rgb(246 120 222 / 0.9) 38%, rgb(168 120 240 / 0.6) 56%, rgb(110 110 230 / 0.25) 70%, transparent 82%),
+    linear-gradient(180deg, #1c1c1f 0%, #232a55 38%, #5a5fd8 58%, #d86ad0 80%, #ff3d7f 100%);
 }
-.discovery-panel {
-  box-shadow: 0 -20px 60px -30px var(--brand-glow), var(--elev-card);
+
+/* Floating panels on the hero (prompt box, discovery panel). */
+.float-panel {
+  box-shadow: 0 24px 60px -24px rgb(0 0 0 / 0.65);
+}
+.light .float-panel {
+  box-shadow: 0 24px 60px -28px rgb(60 40 160 / 0.35);
 }
 
 /* Dotted texture used on hero and auth backdrops. */

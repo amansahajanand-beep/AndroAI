@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import type { TestCase, TestJob, TestJobKind, ValidationStatus } from "@apppilot/contracts";
 import { Bot, Play, Smartphone, TestTube2 } from "lucide-react";
 import { toast } from "sonner";
-import { PageBody, PageHeader } from "@/components/layout/page";
+import { PageBody } from "@/components/layout/page";
 import { LogViewer } from "@/components/logs/log-viewer";
 import { EmptyState, LoadingRows, QueryView } from "@/components/states/states";
 import { VALIDATION_STATUS, ValidationBadge } from "@/components/status/status-badge";
@@ -151,10 +151,8 @@ export function TestingCenterScreen({ projectId }: { projectId: string }) {
 
   return (
     <PageBody>
-      <PageHeader
-        title="Tests"
-        description="Results use five statuses so a test that couldn't run is never counted as a pass."
-        actions={
+      {/* The project tabs already name this page; only its action sits here. */}
+      <div className="mb-4 flex justify-end">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button loading={start.isPending}>
@@ -169,8 +167,7 @@ export function TestingCenterScreen({ projectId }: { projectId: string }) {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-        }
-      />
+      </div>
       <div className="mb-4 flex flex-wrap gap-x-4 gap-y-1.5 text-[13px] text-muted-foreground">
         {(Object.keys(VALIDATION_STATUS) as ValidationStatus[]).map((s) => (
           <span key={s} className="flex items-center gap-1.5">

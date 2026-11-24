@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSyncExternalStore } from "react";
 import { useTheme } from "next-themes";
-import { FlaskConical, LogOut, Moon, Settings, Sun, UserRound, CreditCard } from "lucide-react";
+import { ChevronDown, FlaskConical, Globe, LogOut, Moon, Settings, Sun, UserRound, CreditCard } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Avatar, Badge } from "@/components/ui/primitives";
@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/overlays";
 import { IS_MOCK } from "@/lib/env";
 import { useLogout, useSession } from "@/lib/api/hooks";
+import { cn } from "@/lib/utils";
 
 /** Always visible while the dev-only mock adapter is active. */
 export function MockModeBadge({ className }: { className?: string }) {
@@ -53,35 +54,62 @@ export function ThemeToggle(_props: { simple?: boolean }) {
   );
 }
 
-export function UserMenu({ compact }: { compact?: boolean }) {
+export function UserMenu({ compact, variant = "default" }: { compact?: boolean; variant?: "default" | "sidebar" }) {
   const { data } = useSession();
   const logout = useLogout();
   const router = useRouter();
+  const { resolvedTheme, setTheme } = useTheme();
+  const mounted = useMounted();
+  const nextTheme = mounted && resolvedTheme === "dark" ? "light" : "dark";
   const user = data?.user;
   if (!user) return null;
+  const sidebar = variant === "sidebar";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          className="flex w-full min-w-0 items-center gap-2.5 rounded-lg p-1.5 text-left transition-colors hover:bg-surface-2"
-          aria-label="Account menu"
-        >
-          <Avatar name={user.name} src={user.avatarUrl} />
-          {!compact ? (
-            <span className="min-w-0">
-              <span className="block truncate text-[14px] font-medium">{user.name}</span>
-              <span className="block truncate text-[13px] text-muted-foreground">{user.email}</span>
+        {sidebar ? (
+          <button
+            className={cn(
+              "flex min-w-0 items-center gap-2.5 rounded-xl border border-border-strong text-left outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-surface-3",
+              compact ? "size-9 justify-center p-0" : "h-10 w-full pl-2 pr-2.5",
+            )}
+            aria-label="Account menu"
+          >
+            <span aria-hidden className="grid size-6 shrink-0 place-items-center rounded-md bg-brand text-[12px] font-semibold text-white">
+              {user.name.trim().charAt(0).toUpperCase() || "?"}
             </span>
-          ) : null}
-        </button>
+            {!compact ? (
+              <>
+                <span className="min-w-0 flex-1 truncate text-[14px] font-semibold">{`${user.name.split(" ")[0]}'s AppPilot`}</span>
+                <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+              </>
+            ) : null}
+          </button>
+        ) : (
+          <button
+            className="flex w-full min-w-0 items-center gap-2.5 rounded-lg p-1.5 text-left transition-colors hover:bg-surface-2"
+            aria-label="Account menu"
+          >
+            <Avatar name={user.name} src={user.avatarUrl} />
+            {!compact ? (
+              <span className="min-w-0">
+                <span className="block truncate text-[14px] font-medium">{user.name}</span>
+                <span className="block truncate text-[13px] text-muted-foreground">{user.email}</span>
+              </span>
+            ) : null}
+          </button>
+        )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
+      <DropdownMenuContent align={sidebar ? "start" : "end"} className="w-56">
         <DropdownMenuLabel>{user.email}</DropdownMenuLabel>
-        <DropdownMenuItem asChild>
-          <Link href="/settings">
-            <UserRound /> Profile and settings
-          </Link>
-        </DropdownMenuItem>
+        {/* Settings is in the sidebar; the IDE has no sidebar, so its menu links there. */}
+        {sidebar ? null : (
+          <DropdownMenuItem asChild>
+            <Link href="/settings">
+              <UserRound /> Settings
+            </Link>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem asChild>
           <Link href="/billing">
             <CreditCard /> Billing and usage
@@ -95,6 +123,19 @@ export function UserMenu({ compact }: { compact?: boolean }) {
           </DropdownMenuItem>
         ) : null}
         <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={(e) => {
+            e.preventDefault();
+            setTheme(nextTheme);
+          }}
+        >
+          {nextTheme === "dark" ? <Moon /> : <Sun />} {nextTheme === "dark" ? "Dark mode" : "Light mode"}
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/">
+            <Globe /> AppPilot website
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() =>
             logout.mutate(undefined, {

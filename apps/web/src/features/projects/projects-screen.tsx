@@ -4,88 +4,144 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { AgentTask, Project } from "@apppilot/contracts";
 import {
-  Code2,
-  FileArchive,
-  Hammer,
+  ArrowDownUp,
+  ChevronRight,
+  Folder,
+  FolderMinus,
+  FolderOpen,
+  FolderPlus,
   LayoutGrid,
   List,
-  MessageSquareText,
+  ListFilter,
   MoreHorizontal,
-  Package,
+  Pencil,
   Plus,
   Search,
-  Settings,
   SearchX,
   Sparkles,
   Trash2,
   X,
-  type LucideIcon,
 } from "lucide-react";
-import { toast } from "sonner";
 import { PageBody } from "@/components/layout/page";
 import { ErrorState } from "@/components/states/states";
 import { BuildStatusBadge } from "@/components/status/status-badge";
 import { Button } from "@/components/ui/button";
 import {
   ConfirmDialog,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  Select,
 } from "@/components/ui/overlays";
-import { Badge, Card, Input, Skeleton, Table, TBody, TD, TH, THead, TR } from "@/components/ui/primitives";
-import { errorMessage } from "@/lib/api/errors";
-import { useAgentTasks, useDeleteProject, useProjects } from "@/lib/api/hooks";
-import { cn, formatBytes, formatRelative } from "@/lib/utils";
+import { Avatar, Badge, Card, Input, Table, TBody, TD, TH, THead, TR } from "@/components/ui/primitives";
+import { useAgentTasks, useProjects, useSession } from "@/lib/api/hooks";
+import { cn, formatRelative } from "@/lib/utils";
+import { useProjectFolders, type ProjectFolder } from "@/stores/project-folders";
+import { pinnedFirst, useProjectPins } from "@/stores/project-pins";
 import { useUiStore } from "@/stores/ui-store";
-import { ProjectTechBadges } from "./project-meta";
-import { NewProjectCard, PROJECT_CARD_SKELETON, ProjectCard } from "./project-card";
+import { CardStatus, PinButton, ProjectCard, ProjectCardSkeleton } from "./project-card";
 import { ProjectThumb } from "./project-preview";
 
-type SourceFilter = "all" | Project["source"];
-type Sort = "updated" | "name" | "created";
+/* ------------------------------------------------------------------ */
+/* Sorting and filters                                                  */
+/* ------------------------------------------------------------------ */
 
-const SOURCE_TABS: { value: SourceFilter; label: string; icon: LucideIcon }[] = [
-  { value: "all", label: "All", icon: Sparkles },
-  { value: "prompt", label: "From prompt", icon: MessageSquareText },
-  { value: "android_zip", label: "Imported", icon: FileArchive },
-  { value: "apk", label: "APK analyses", icon: Package },
+type Sort = "created" | "updated" | "name";
+const SORTS: { value: Sort; label: string }[] = [
+  { value: "created", label: "Date created" },
+  { value: "updated", label: "Last edited" },
+  { value: "name", label: "Name (A–Z)" },
 ];
 
-function ProjectActions({ project, onDelete, className }: { project: Project; onDelete: () => void; className?: string }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="subtle" size="icon-sm" className={className} aria-label={`Actions for ${project.name}`}>
-          <MoreHorizontal />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem asChild>
-          <Link href={`/projects/${project.id}/ide`}>
-            <Code2 /> Open in IDE
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link href={`/projects/${project.id}/builds`}>
-            <Hammer /> Builds
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link href={`/projects/${project.id}/settings`}>
-            <Settings /> Settings
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onSelect={onDelete}>
-          <Trash2 /> Delete project
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
+const SORTERS: Record<Sort, (a: Project, b: Project) => number> = {
+  created: (a, b) => b.createdAt.localeCompare(a.createdAt),
+  updated: (a, b) => b.updatedAt.localeCompare(a.updatedAt),
+  name: (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+};
+
+interface FilterGroup {
+  key: string;
+  label: string;
+  options: { value: string; label: string }[];
+  test: (p: Project, value: string) => boolean;
 }
+
+/** Options in a group are OR-ed; groups are AND-ed together. */
+const FILTER_GROUPS: FilterGroup[] = [
+  {
+    key: "source",
+    label: "Source",
+    options: [
+      { value: "prompt", label: "From prompt" },
+      { value: "android_zip", label: "Imported project" },
+      { value: "apk", label: "APK analysis" },
+    ],
+    test: (p, v) => p.source === v,
+  },
+  {
+    key: "status",
+    label: "Status",
+    options: [
+      { value: "running", label: "Agent running" },
+      { value: "passed", label: "Build passed" },
+      { value: "failed", label: "Build failed" },
+      { value: "none", label: "No builds" },
+    ],
+    test: (p, v) =>
+      v === "running"
+        ? p.activeTaskCount > 0
+        : v === "passed"
+          ? p.lastBuild?.status === "succeeded"
+          : v === "failed"
+            ? p.lastBuild?.status === "failed"
+            : !p.lastBuild,
+  },
+  {
+    key: "language",
+    label: "Language",
+    options: [
+      { value: "kotlin", label: "Kotlin" },
+      { value: "java", label: "Java" },
+    ],
+    test: (p, v) => p.language === v,
+  },
+  {
+    key: "ui",
+    label: "UI toolkit",
+    options: [
+      { value: "compose", label: "Jetpack Compose" },
+      { value: "xml", label: "XML views" },
+    ],
+    test: (p, v) => p.uiToolkit === v,
+  },
+];
+
+const filterKey = (group: string, value: string) => `${group}:${value}`;
+
+function matchesFilters(p: Project, active: Set<string>) {
+  return FILTER_GROUPS.every((g) => {
+    const chosen = g.options.filter((o) => active.has(filterKey(g.key, o.value)));
+    return chosen.length === 0 || chosen.some((o) => g.test(p, o.value));
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Small pieces                                                          */
+/* ------------------------------------------------------------------ */
+
+const TOOL_BTN =
+  "inline-flex h-9 items-center gap-2 rounded-lg border border-border-strong px-3 text-[13.5px] font-medium text-foreground/90 outline-none transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-surface-2";
 
 /** First-run empty state: three floating device mockups and one clear next step. */
 function FirstProjectEmpty() {
@@ -95,11 +151,7 @@ function FirstProjectEmpty() {
     { hue: 200, rot: "rotate-12", pos: "right-[6%] top-10", delay: "2.4s" },
   ];
   return (
-    <div className="relative isolate overflow-hidden rounded-3xl border border-border bg-card px-6 py-14 text-center shadow-card sm:py-20">
-      <div aria-hidden className="absolute inset-0 -z-10">
-        <div className="absolute left-1/2 top-0 h-80 w-[36rem] max-w-full -translate-x-1/2 rounded-full bg-brand opacity-25 blur-[100px]" />
-        <div className="dot-grid absolute inset-0 opacity-30 [mask-image:radial-gradient(ellipse_60%_60%_at_50%_30%,black,transparent)]" />
-      </div>
+    <div className="relative isolate overflow-hidden rounded-2xl border border-border bg-card px-6 py-14 text-center sm:py-20">
       <div aria-hidden className="relative mx-auto h-56 w-full max-w-md">
         {phones.map((p, i) => (
           <div key={i} className={cn("absolute w-24 animate-float", p.pos)} style={{ animationDelay: p.delay }}>
@@ -120,110 +172,282 @@ function FirstProjectEmpty() {
           </div>
         ))}
       </div>
-      <h2 className="mt-4 text-balance font-display text-3xl font-semibold tracking-[-0.03em] sm:text-4xl">
-        Your first app is <span className="text-brand">one sentence away</span>
-      </h2>
-      <p className="mx-auto mt-3 max-w-md text-pretty text-[15.5px] leading-relaxed text-muted-foreground">
+      <h2 className="mt-4 text-balance text-2xl font-semibold tracking-[-0.03em] sm:text-3xl">Your first app is one sentence away</h2>
+      <p className="mx-auto mt-3 max-w-md text-pretty text-[15px] leading-relaxed text-muted-foreground">
         Describe an app, upload an Android Studio project, or inspect an APK. Everything you create shows up here.
       </p>
-      <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-        <Button asChild size="lg">
-          <Link href="/projects/new">
-            <Sparkles /> Create New Project
-          </Link>
-        </Button>
-        <Button asChild size="lg" variant="outline">
-          <Link href="/projects/new?method=zip">
-            <FileArchive /> Upload a project
-          </Link>
-        </Button>
-      </div>
+      <Button asChild size="lg" className="mt-8">
+        <Link href="/projects/new">
+          <Plus /> New project
+        </Link>
+      </Button>
     </div>
   );
 }
 
-function GridSkeleton() {
+/** Create or rename a folder. */
+function FolderNameDialog({
+  open,
+  onOpenChange,
+  title,
+  submitLabel,
+  initial = "",
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  submitLabel: string;
+  initial?: string;
+  onSubmit: (name: string) => void;
+}) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="Loading projects">
-      {[0, 1, 2, 3, 4, 5].map((i) => (
-        <Skeleton key={i} className={PROJECT_CARD_SKELETON} style={{ opacity: 1 - i * 0.1 }} />
-      ))}
-    </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        {/* Keyed so the field resets every time the dialog opens. */}
+        <FolderNameForm key={open ? initial : "closed"} title={title} submitLabel={submitLabel} initial={initial} onCancel={() => onOpenChange(false)} onSubmit={onSubmit} />
+      </DialogContent>
+    </Dialog>
   );
 }
+
+function FolderNameForm({
+  title,
+  submitLabel,
+  initial,
+  onCancel,
+  onSubmit,
+}: {
+  title: string;
+  submitLabel: string;
+  initial: string;
+  onCancel: () => void;
+  onSubmit: (name: string) => void;
+}) {
+  const [name, setName] = useState(initial);
+  return (
+    <form
+      className="grid gap-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (name.trim()) onSubmit(name.trim());
+      }}
+    >
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription>Folders are saved in this browser.</DialogDescription>
+      </DialogHeader>
+      <label className="grid gap-1.5 text-[14px]">
+        <span className="font-medium">Name</span>
+        <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder="e.g. Client apps" autoFocus />
+      </label>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={!name.trim()}>
+          {submitLabel}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+/** Per-project menu: only folder actions (opening, builds and settings live on the project itself). */
+function ProjectFolderMenu({
+  project,
+  folders,
+  folderId,
+  onMove,
+  onNewFolder,
+}: {
+  project: Project;
+  folders: ProjectFolder[];
+  folderId: string | null;
+  onMove: (folderId: string | null) => void;
+  onNewFolder: () => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="subtle" size="icon-sm" aria-label={`Folder options for ${project.name}`}>
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuLabel>Move to folder</DropdownMenuLabel>
+        {folders.length > 0 ? (
+          <DropdownMenuRadioGroup value={folderId ?? ""} onValueChange={(v) => onMove(v || null)}>
+            {folders.map((f) => (
+              <DropdownMenuRadioItem key={f.id} value={f.id}>
+                <Folder /> <span className="truncate">{f.name}</span>
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        ) : null}
+        <DropdownMenuItem onSelect={onNewFolder}>
+          <FolderPlus /> New folder…
+        </DropdownMenuItem>
+        {folderId ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => onMove(null)}>
+              <FolderMinus /> Remove from folder
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function FolderMenu({ folder, onRename, onDelete }: { folder: ProjectFolder; onRename: () => void; onDelete: () => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="subtle" size="icon-sm" aria-label={`Options for folder ${folder.name}`}>
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={onRename}>
+          <Pencil /> Rename
+        </DropdownMenuItem>
+        <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+          <Trash2 /> Delete folder
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Page                                                                  */
+/* ------------------------------------------------------------------ */
 
 export function ProjectsScreen() {
   const projects = useProjects();
-  const del = useDeleteProject();
+  const { data: session } = useSession();
   const view = useUiStore((s) => s.projectsView);
   const setView = useUiStore((s) => s.setProjectsView);
+  const { folders, placement, create, rename, remove, move } = useProjectFolders();
+  const { pinned, toggle: togglePin } = useProjectPins();
+
   const [q, setQ] = useState("");
-  const [source, setSource] = useState<SourceFilter>("all");
-  const [sort, setSort] = useState<Sort>("updated");
-  const [toDelete, setToDelete] = useState<Project | null>(null);
-  const [confirmName, setConfirmName] = useState("");
+  const [sort, setSort] = useState<Sort>("created");
+  const [filters, setFilters] = useState<Set<string>>(() => new Set());
+  const [openFolderId, setOpenFolderId] = useState<string | null>(null);
+  // Folder dialogs: create (optionally moving a project into the new folder), rename, delete.
+  const [creating, setCreating] = useState<{ moveProjectId?: string } | null>(null);
+  const [renaming, setRenaming] = useState<ProjectFolder | null>(null);
+  const [deleting, setDeleting] = useState<ProjectFolder | null>(null);
 
-  const all = projects.data?.items ?? [];
+  const all = useMemo(() => projects.data?.items ?? [], [projects.data]);
+  const folderIds = new Set(folders.map((f) => f.id));
+  const folderOf = (p: Project): string | null => {
+    const id = placement[p.id];
+    return id && folderIds.has(id) ? id : null;
+  };
+  const openFolder = folders.find((f) => f.id === openFolderId) ?? null;
 
-  const filtered = useMemo(() => {
-    const items = projects.data?.items ?? [];
-    const needle = q.trim().toLowerCase();
-    return items
-      .filter((p) => source === "all" || p.source === source)
+  const needle = q.trim().toLowerCase();
+  const narrowing = needle !== "" || filters.size > 0;
+
+  // Inside a folder: its projects. At the top level: projects not in a folder,
+  // or every project while searching/filtering so nothing hides inside a folder.
+  const scope = all.filter((p) => (openFolder ? folderOf(p) === openFolder.id : narrowing || !folderOf(p)));
+  // Pinned projects stay on top; the chosen sort orders everything below (and among the pinned ones by pin time).
+  const visible = pinnedFirst(
+    scope
       .filter((p) => !needle || p.name.toLowerCase().includes(needle) || (p.packageName ?? "").toLowerCase().includes(needle))
-      .sort((a, b) =>
-        sort === "name" ? a.name.localeCompare(b.name) : sort === "created" ? b.createdAt.localeCompare(a.createdAt) : b.updatedAt.localeCompare(a.updatedAt),
-      );
-  }, [projects.data, q, source, sort]);
+      .filter((p) => matchesFilters(p, filters))
+      .sort(SORTERS[sort]),
+    pinned,
+  );
+  const showFolders = !openFolder && !narrowing && folders.length > 0;
+  const countIn = (f: ProjectFolder) => all.filter((p) => folderOf(p) === f.id).length;
 
-  const countFor = (s: SourceFilter) => (s === "all" ? all.length : all.filter((p) => p.source === s).length);
+  // The live step on each card comes from active agent tasks (only fetched when something runs).
   const running = all.reduce((n, p) => n + p.activeTaskCount, 0);
-  // The live step label on each card comes from the active agent tasks (same query as the dashboard).
   const activeTasks = useAgentTasks({ status: "active" }, { enabled: running > 0 });
   const taskByProject = useMemo(() => {
     const m = new Map<string, AgentTask>();
     for (const t of activeTasks.data ?? []) if (!m.has(t.projectId)) m.set(t.projectId, t);
     return m;
   }, [activeTasks.data]);
-  const filtering = q.trim() !== "" || source !== "all";
+
+  const owner = session?.user ? { name: session.user.name, avatarUrl: session.user.avatarUrl } : undefined;
+  const metaFor = (p: Project) => (sort === "updated" ? `Edited ${formatRelative(p.updatedAt)}` : `Created ${formatRelative(p.createdAt)}`);
+
+  const toggleFilter = (key: string) =>
+    setFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const clearAll = () => {
+    setQ("");
+    setFilters(new Set());
+  };
+  const activeChips = FILTER_GROUPS.flatMap((g) => g.options.filter((o) => filters.has(filterKey(g.key, o.value))).map((o) => ({ key: filterKey(g.key, o.value), label: o.label })));
+
+  const menuFor = (p: Project) => (
+    <ProjectFolderMenu
+      project={p}
+      folders={folders}
+      folderId={folderOf(p)}
+      onMove={(id) => move(p.id, id)}
+      onNewFolder={() => setCreating({ moveProjectId: p.id })}
+    />
+  );
+
+  const hasProjects = all.length > 0;
 
   return (
-    <PageBody className="max-w-[1280px]">
-      <header className="flex animate-fade-up flex-wrap items-end justify-between gap-4 pb-8">
-        <div className="min-w-0">
-          <h1 className="text-[clamp(2rem,4vw,2.75rem)] font-semibold leading-tight tracking-[-0.035em]">Your projects</h1>
-          <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[15px] text-muted-foreground">
-            <span>Generated apps, imported Android Studio projects and APK analyses.</span>
-            {projects.data ? (
-              <span className="inline-flex items-center gap-2 text-[13px]">
-                <Badge tone="neutral">{all.length} total</Badge>
-                {running > 0 ? (
-                  <Badge tone="ai">
-                    <span className="size-1.5 animate-glow rounded-full bg-ai" aria-hidden /> {running} agent{running === 1 ? "" : "s"} running
-                  </Badge>
-                ) : null}
-              </span>
-            ) : null}
-          </p>
+    <PageBody className="max-w-[1400px]">
+      {/* Title row */}
+      <header className="flex flex-wrap items-center justify-between gap-3 pb-6">
+        {openFolder ? (
+          <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-[24px] font-semibold tracking-[-0.03em]">
+            <button type="button" onClick={() => setOpenFolderId(null)} className="rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+              Projects
+            </button>
+            <ChevronRight className="size-5 shrink-0 text-subtle-foreground" aria-hidden />
+            <h1 className="truncate" aria-current="page">
+              {openFolder.name}
+            </h1>
+            <FolderMenu folder={openFolder} onRename={() => setRenaming(openFolder)} onDelete={() => setDeleting(openFolder)} />
+          </nav>
+        ) : (
+          <h1 className="text-[24px] font-semibold tracking-[-0.03em]">Projects</h1>
+        )}
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setCreating({})}>
+            <FolderPlus /> New folder
+          </Button>
+          <Button asChild>
+            <Link href="/projects/new">
+              <Plus /> New project
+            </Link>
+          </Button>
         </div>
-        <Button asChild size="lg">
-          <Link href="/projects/new">
-            <Plus /> New project
-          </Link>
-        </Button>
       </header>
 
-      {/* Hide the toolbar when there is nothing to filter yet. */}
-      {projects.isPending || all.length > 0 || projects.isError ? (
-        <div className="mb-6 grid animate-fade-up gap-3 [animation-delay:80ms]">
+      {/* Toolbar: search, filter, view */}
+      {hasProjects || projects.isPending ? (
+        <div className="mb-6 grid gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <div className="relative min-w-60 flex-1 sm:max-w-md">
-              <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-subtle-foreground" aria-hidden />
+            <div className="relative min-w-52 flex-1 sm:max-w-sm">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle-foreground" aria-hidden />
               <Input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setQ("");
+                }}
                 placeholder="Search by name or package"
-                className="h-10 rounded-full bg-card pl-10 pr-9"
+                className="h-9 rounded-lg pl-9 pr-8"
                 aria-label="Search projects"
               />
               {q ? (
@@ -231,191 +455,307 @@ export function ProjectsScreen() {
                   type="button"
                   onClick={() => setQ("")}
                   aria-label="Clear search"
-                  className="absolute right-2.5 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-surface-3 hover:text-foreground"
+                  className="absolute right-1.5 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-surface-3 hover:text-foreground"
                 >
                   <X className="size-3.5" />
                 </button>
               ) : null}
             </div>
-            <Select<Sort>
-              aria-label="Sort"
-              className="h-10 w-44 rounded-full"
-              value={sort}
-              onValueChange={setSort}
-              options={[
-                { value: "updated", label: "Recently updated" },
-                { value: "created", label: "Recently created" },
-                { value: "name", label: "Name" },
-              ]}
-            />
-            <div className="ml-auto flex rounded-full border border-input bg-card p-1" role="group" aria-label="View">
-              <Button variant={view === "grid" ? "secondary" : "ghost"} size="icon-sm" className="rounded-full" aria-pressed={view === "grid"} aria-label="Grid view" onClick={() => setView("grid")}>
-                <LayoutGrid />
-              </Button>
-              <Button variant={view === "list" ? "secondary" : "ghost"} size="icon-sm" className="rounded-full" aria-pressed={view === "list"} aria-label="List view" onClick={() => setView("list")}>
-                <List />
-              </Button>
+
+            <div className="ml-auto flex items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger className={TOOL_BTN}>
+                  <ListFilter className="size-4" aria-hidden />
+                  Filter
+                  {filters.size > 0 ? (
+                    <span className="grid h-5 min-w-5 place-items-center rounded-full bg-foreground px-1.5 text-[11px] font-semibold text-background">{filters.size}</span>
+                  ) : null}
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="max-h-[70vh] w-60 overflow-y-auto">
+                  {FILTER_GROUPS.map((g, i) => (
+                    <div key={g.key} role="group" aria-label={g.label}>
+                      {i > 0 ? <DropdownMenuSeparator /> : null}
+                      <DropdownMenuLabel>{g.label}</DropdownMenuLabel>
+                      {g.options.map((o) => {
+                        const key = filterKey(g.key, o.value);
+                        const count = all.filter((p) => g.test(p, o.value)).length;
+                        return (
+                          <DropdownMenuCheckboxItem key={key} checked={filters.has(key)} onCheckedChange={() => toggleFilter(key)} onSelect={(e) => e.preventDefault()}>
+                            <span className="flex-1">{o.label}</span>
+                            <span className="text-[12px] tabular-nums text-subtle-foreground">{count}</span>
+                          </DropdownMenuCheckboxItem>
+                        );
+                      })}
+                    </div>
+                  ))}
+                  {filters.size > 0 ? (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => setFilters(new Set())}>
+                        <X /> Clear filters
+                      </DropdownMenuItem>
+                    </>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger className={TOOL_BTN}>
+                  {view === "grid" ? <LayoutGrid className="size-4" aria-hidden /> : <List className="size-4" aria-hidden />}
+                  View
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuLabel className="flex items-center gap-1.5">
+                    <ArrowDownUp className="size-3.5" aria-hidden /> Sort by
+                  </DropdownMenuLabel>
+                  <DropdownMenuRadioGroup value={sort} onValueChange={(v) => setSort(v as Sort)}>
+                    {SORTS.map((s) => (
+                      <DropdownMenuRadioItem key={s.value} value={s.value}>
+                        {s.label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>Layout</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup value={view} onValueChange={(v) => setView(v as "grid" | "list")}>
+                    <DropdownMenuRadioItem value="grid">
+                      <LayoutGrid /> Grid
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="list">
+                      <List /> List
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
-          <div className="flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Filter by source">
-            {SOURCE_TABS.map((t) => {
-              const active = source === t.value;
-              return (
+          {activeChips.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-1.5" aria-label="Active filters">
+              {activeChips.map((c) => (
                 <button
-                  key={t.value}
+                  key={c.key}
                   type="button"
-                  aria-pressed={active}
-                  onClick={() => setSource(t.value)}
-                  className={cn(
-                    "inline-flex h-9 shrink-0 items-center gap-2 rounded-full border px-3.5 text-[13.5px] font-medium transition-all duration-200",
-                    active
-                      ? "border-transparent bg-brand text-white shadow-[0_6px_18px_-8px_var(--brand-glow)]"
-                      : "border-border-strong bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground",
-                  )}
+                  onClick={() => toggleFilter(c.key)}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-full bg-surface-3 pl-3 pr-2 text-[12.5px] font-medium transition-colors hover:bg-surface-2"
+                  aria-label={`Remove filter ${c.label}`}
                 >
-                  <t.icon className="size-3.5" aria-hidden />
-                  {t.label}
-                  {projects.data ? (
-                    <span className={cn("rounded-full px-1.5 text-[12px] tabular-nums", active ? "bg-white/20" : "bg-surface-3")}>{countFor(t.value)}</span>
-                  ) : null}
+                  {c.label}
+                  <X className="size-3.5 text-muted-foreground" aria-hidden />
                 </button>
-              );
-            })}
-          </div>
+              ))}
+              <button type="button" onClick={() => setFilters(new Set())} className="ml-1 text-[12.5px] font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
+                Clear all
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
+      {/* Content */}
       {projects.isPending ? (
-        view === "grid" ? (
-          <GridSkeleton />
-        ) : (
-          <Card className="grid gap-2 p-4" aria-busy="true" aria-label="Loading projects">
-            {[0, 1, 2, 3, 4].map((i) => (
-              <Skeleton key={i} className="h-14 rounded-xl" style={{ opacity: 1 - i * 0.15 }} />
-            ))}
-          </Card>
-        )
+        <div className="grid gap-x-5 gap-y-7 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4" aria-busy="true" aria-label="Loading projects">
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <ProjectCardSkeleton key={i} style={{ opacity: 1 - i * 0.12 }} />
+          ))}
+        </div>
       ) : projects.isError ? (
         <Card>
           <ErrorState error={projects.error} onRetry={() => projects.refetch()} />
         </Card>
-      ) : all.length === 0 ? (
+      ) : !hasProjects ? (
         <FirstProjectEmpty />
-      ) : filtered.length === 0 ? (
-        <Card className="overflow-hidden">
-          <div className="flex flex-col items-center gap-2 px-6 py-16 text-center">
-            <span className="grid size-14 place-items-center rounded-2xl border border-border-strong bg-surface-2 text-muted-foreground shadow-card">
-              <SearchX className="size-6" aria-hidden />
-            </span>
-            <p className="mt-2 font-display text-[18px] font-semibold tracking-tight">No projects match</p>
-            <p className="max-w-sm text-[14px] text-muted-foreground">
-              {q.trim() ? `Nothing matches “${q.trim()}”` : "Nothing matches this filter"}. Try a different name or clear your filters.
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-3"
-              onClick={() => {
-                setQ("");
-                setSource("all");
-              }}
-            >
-              Clear filters
-            </Button>
-          </div>
-        </Card>
-      ) : view === "grid" ? (
-        <div className="stagger grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((p, i) => (
-            <ProjectCard
-              key={p.id}
-              project={p}
-              task={taskByProject.get(p.id)}
-              index={i}
-              actions={<ProjectActions project={p} onDelete={() => setToDelete(p)} className="text-muted-foreground hover:text-foreground" />}
-            />
-          ))}
-          {!filtering ? <NewProjectCard index={filtered.length} /> : null}
-        </div>
       ) : (
-        <Card className="animate-fade-up overflow-hidden">
-          <Table>
-            <THead>
-              <TR>
-                <TH>Name</TH>
-                <TH className="hidden md:table-cell">Stack</TH>
-                <TH>Last build</TH>
-                <TH className="hidden sm:table-cell">Storage</TH>
-                <TH className="hidden sm:table-cell">Updated</TH>
-                <TH className="w-10">
-                  <span className="sr-only">Actions</span>
-                </TH>
-              </TR>
-            </THead>
-            <TBody>
-              {filtered.map((p) => (
-                <TR key={p.id} className="hover:bg-primary-soft">
-                  <TD className="py-3">
-                    <Link href={`/projects/${p.id}/ide`} className="group flex items-center gap-3">
-                      <ProjectThumb project={p} />
-                      <span className="min-w-0">
-                        <span className="flex items-center gap-2">
-                          <span className="truncate font-medium group-hover:text-primary">{p.name}</span>
-                          {p.activeTaskCount > 0 ? <Badge tone="ai">{p.activeTaskCount} running</Badge> : null}
-                        </span>
-                        <span className="block truncate font-mono text-[12.5px] text-muted-foreground">{p.packageName ?? "—"}</span>
+        <>
+          {/* Folders (top level, when not searching or filtering) */}
+          {showFolders ? (
+            view === "grid" ? (
+              <div className="mb-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4" aria-label="Folders">
+                {folders.map((f) => (
+                  <div key={f.id} className="group relative flex items-center gap-3 rounded-xl border border-border bg-card p-3 transition-colors hover:border-border-strong hover:bg-surface-2">
+                    <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-surface-3 text-muted-foreground group-hover:text-foreground" aria-hidden>
+                      <Folder className="size-5" />
+                    </span>
+                    <button type="button" onClick={() => setOpenFolderId(f.id)} className="min-w-0 flex-1 text-left outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:after:ring-2 focus-visible:after:ring-ring">
+                      <span className="block truncate text-[14px] font-semibold">{f.name}</span>
+                      <span className="block text-[12.5px] text-subtle-foreground">
+                        {countIn(f)} {countIn(f) === 1 ? "project" : "projects"}
                       </span>
-                    </Link>
-                  </TD>
-                  <TD className="hidden md:table-cell">
-                    <ProjectTechBadges project={p} />
-                  </TD>
-                  <TD>{p.lastBuild ? <BuildStatusBadge status={p.lastBuild.status} /> : <span className="text-[13px] text-muted-foreground">None</span>}</TD>
-                  <TD className="hidden tabular-nums text-muted-foreground sm:table-cell">{formatBytes(p.storageBytes)}</TD>
-                  <TD className="hidden text-muted-foreground sm:table-cell">{formatRelative(p.updatedAt)}</TD>
-                  <TD>
-                    <ProjectActions project={p} onDelete={() => setToDelete(p)} />
-                  </TD>
-                </TR>
+                    </button>
+                    <div className="relative z-10 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 has-data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100">
+                      <FolderMenu folder={f} onRename={() => setRenaming(f)} onDelete={() => setDeleting(f)} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null
+          ) : null}
+
+          {visible.length === 0 && !(view === "list" && showFolders) ? (
+            narrowing ? (
+              <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border-strong px-6 py-16 text-center">
+                <SearchX className="size-6 text-muted-foreground" aria-hidden />
+                <p className="mt-1 text-[16px] font-semibold">No projects match</p>
+                <p className="max-w-sm text-[14px] text-muted-foreground">
+                  {needle ? `Nothing matches “${q.trim()}”` : "Nothing matches these filters"}
+                  {openFolder ? " in this folder" : ""}.
+                </p>
+                <Button variant="outline" size="sm" className="mt-2" onClick={clearAll}>
+                  Clear search and filters
+                </Button>
+              </div>
+            ) : openFolder ? (
+              <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border-strong px-6 py-16 text-center">
+                <FolderOpen className="size-6 text-muted-foreground" aria-hidden />
+                <p className="mt-1 text-[16px] font-semibold">This folder is empty</p>
+                <p className="max-w-sm text-[14px] text-muted-foreground">Use a project&apos;s ⋯ menu to move it here.</p>
+              </div>
+            ) : (
+              <p className="py-10 text-center text-[14px] text-muted-foreground">Every project is in a folder.</p>
+            )
+          ) : view === "grid" ? (
+            <div className="stagger grid gap-x-5 gap-y-7 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+              {visible.map((p, i) => (
+                <ProjectCard
+                  key={p.id}
+                  project={p}
+                  task={taskByProject.get(p.id)}
+                  index={i}
+                  owner={owner}
+                  meta={metaFor(p)}
+                  actions={menuFor(p)}
+                  pinned={pinned.includes(p.id)}
+                  onTogglePin={() => togglePin(p.id)}
+                />
               ))}
-            </TBody>
-          </Table>
-        </Card>
+            </div>
+          ) : (
+            <Card className="overflow-hidden">
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Name</TH>
+                    <TH className="hidden md:table-cell">Owner</TH>
+                    <TH>Status</TH>
+                    <TH className="hidden sm:table-cell">Created</TH>
+                    <TH className="hidden lg:table-cell">Last edited</TH>
+                    <TH className="w-20">
+                      <span className="sr-only">Pin and folder options</span>
+                    </TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {showFolders
+                    ? folders.map((f) => (
+                        <TR key={f.id}>
+                          <TD className="py-2.5">
+                            <button type="button" onClick={() => setOpenFolderId(f.id)} className="flex items-center gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                              <span className="grid size-10 place-items-center rounded-xl bg-surface-3 text-muted-foreground" aria-hidden>
+                                <Folder className="size-5" />
+                              </span>
+                              <span>
+                                <span className="block font-medium">{f.name}</span>
+                                <span className="block text-[12.5px] text-subtle-foreground">
+                                  {countIn(f)} {countIn(f) === 1 ? "project" : "projects"}
+                                </span>
+                              </span>
+                            </button>
+                          </TD>
+                          <TD className="hidden md:table-cell" />
+                          <TD />
+                          <TD className="hidden text-muted-foreground sm:table-cell">{formatRelative(f.createdAt)}</TD>
+                          <TD className="hidden lg:table-cell" />
+                          <TD>
+                            <FolderMenu folder={f} onRename={() => setRenaming(f)} onDelete={() => setDeleting(f)} />
+                          </TD>
+                        </TR>
+                      ))
+                    : null}
+                  {visible.map((p) => (
+                    <TR key={p.id} className="group">
+                      <TD className="py-2.5">
+                        <Link href={`/projects/${p.id}/ide`} className="group flex min-w-0 items-center gap-3 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                          <ProjectThumb project={p} />
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium group-hover:underline">{p.name}</span>
+                            <span className="block truncate font-mono text-[12px] text-subtle-foreground">{p.packageName ?? "—"}</span>
+                          </span>
+                        </Link>
+                      </TD>
+                      <TD className="hidden md:table-cell">
+                        {owner ? (
+                          <span className="flex items-center gap-2 text-muted-foreground">
+                            <Avatar name={owner.name} src={owner.avatarUrl} className="size-6 ring-0 [&_span]:text-[10px]" />
+                            <span className="truncate">{owner.name}</span>
+                          </span>
+                        ) : null}
+                      </TD>
+                      <TD>
+                        {p.activeTaskCount > 0 ? (
+                          <span className="text-[13px]">
+                            <CardStatus project={p} task={taskByProject.get(p.id)} />
+                          </span>
+                        ) : p.lastBuild ? (
+                          <BuildStatusBadge status={p.lastBuild.status} />
+                        ) : (
+                          <Badge tone="neutral">No builds</Badge>
+                        )}
+                      </TD>
+                      <TD className="hidden text-muted-foreground sm:table-cell">{formatRelative(p.createdAt)}</TD>
+                      <TD className="hidden text-muted-foreground lg:table-cell">{formatRelative(p.updatedAt)}</TD>
+                      <TD>
+                        <div className="flex items-center justify-end gap-1">
+                          <PinButton pinned={pinned.includes(p.id)} name={p.name} onToggle={() => togglePin(p.id)} />
+                          {menuFor(p)}
+                        </div>
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </Card>
+          )}
+        </>
       )}
 
+      {/* Folder dialogs */}
+      <FolderNameDialog
+        open={!!creating}
+        onOpenChange={(o) => !o && setCreating(null)}
+        title="New folder"
+        submitLabel="Create folder"
+        onSubmit={(name) => {
+          const id = create(name);
+          if (creating?.moveProjectId) move(creating.moveProjectId, id);
+          setCreating(null);
+        }}
+      />
+      <FolderNameDialog
+        open={!!renaming}
+        onOpenChange={(o) => !o && setRenaming(null)}
+        title="Rename folder"
+        submitLabel="Save"
+        initial={renaming?.name ?? ""}
+        onSubmit={(name) => {
+          if (renaming) rename(renaming.id, name);
+          setRenaming(null);
+        }}
+      />
       <ConfirmDialog
-        open={!!toDelete}
-        onOpenChange={(o) => {
-          if (!o) {
-            setToDelete(null);
-            setConfirmName("");
-          }
-        }}
-        title={`Delete ${toDelete?.name ?? "project"}?`}
-        description="This deletes the project's files, builds, artifacts and agent history. It can't be undone."
-        confirmLabel="Delete project"
+        open={!!deleting}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title={`Delete folder “${deleting?.name ?? ""}”?`}
+        description="Projects inside it move back to Projects. No project is deleted."
+        confirmLabel="Delete folder"
         destructive
-        loading={del.isPending}
         onConfirm={() => {
-          if (!toDelete || confirmName !== toDelete.name) return;
-          del.mutate(toDelete.id, {
-            onSuccess: () => {
-              toast.success(`Deleted ${toDelete.name}`);
-              setToDelete(null);
-              setConfirmName("");
-            },
-            onError: (e) => toast.error(errorMessage(e)),
-          });
+          if (deleting) {
+            remove(deleting.id);
+            if (openFolderId === deleting.id) setOpenFolderId(null);
+          }
+          setDeleting(null);
         }}
-      >
-        <label className="grid gap-1.5 text-[14px]">
-          <span>
-            Type <span className="font-mono">{toDelete?.name}</span> to confirm
-          </span>
-          <Input value={confirmName} onChange={(e) => setConfirmName(e.target.value)} autoFocus />
-        </label>
-      </ConfirmDialog>
+      />
     </PageBody>
   );
 }

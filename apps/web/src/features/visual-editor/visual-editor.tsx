@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import type { UiEdit, UiNode, UiScreen } from "@apppilot/contracts";
 import { ChevronRight, MousePointerSquareDashed, Redo2, Sparkles, Undo2 } from "lucide-react";
 import { toast } from "sonner";
-import { PageBody, PageHeader } from "@/components/layout/page";
+import { PageBody } from "@/components/layout/page";
 import { EmptyState, ErrorState, LoadingRows, PendingBackend } from "@/components/states/states";
 import { Button } from "@/components/ui/button";
 import { Card, Input, Label, Textarea } from "@/components/ui/primitives";
@@ -207,10 +207,9 @@ export function VisualEditorScreen({ projectId }: { projectId: string }) {
   const screens = useUiScreens(projectId);
   return (
     <PageBody>
-      <PageHeader
-        title="Visual editor"
-        description="Select a component, change its properties or describe a change. Edits are written to your Compose or XML source and arrive as a reviewable diff."
-      />
+      <p className="mb-5 max-w-prose text-[14px] text-muted-foreground">
+        Select a component, change its properties or describe a change. Edits arrive as a reviewable diff.
+      </p>
       {screens.isPending ? (
         <LoadingRows rows={6} />
       ) : screens.isError ? (
