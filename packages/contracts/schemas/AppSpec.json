@@ -1,0 +1,202 @@
+{
+  "$defs": {
+    "ScreenPlan": {
+      "additionalProperties": false,
+      "description": "One screen: its identity, what it shows and which screens its buttons open.",
+      "properties": {
+        "schema_version": {
+          "default": "0.1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "description": "PascalCase ASCII identifier (letters and digits, starting with a capital, not ending in 'Screen'), unique ignoring letter case. The generator derives code from it.",
+          "maxLength": 30,
+          "minLength": 1,
+          "pattern": "^[A-Z][A-Za-z0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "description": "The headline of the screen, and the label of every button that opens it. Display text: letters, digits and a few marks (space _ - . ' & , ( ) ! +), no markup.",
+          "maxLength": 40,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional line of text under the title (display text).",
+          "title": "Description"
+        },
+        "navigates_to": {
+          "description": "Ids of the screens this screen opens, one button each, in this order. Each must exist, not be this screen and not repeat.",
+          "items": {
+            "maxLength": 30,
+            "minLength": 1,
+            "pattern": "^[A-Z][A-Za-z0-9]*$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Navigates To",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "title": "ScreenPlan",
+      "type": "object"
+    },
+    "UnsupportedCategory": {
+      "description": "Why a requested feature is out of reach. New values may be added; handle unknown ones.",
+      "enum": [
+        "data_storage",
+        "authentication",
+        "user_input",
+        "search",
+        "lists_and_media",
+        "networking",
+        "app_logic",
+        "device_features",
+        "distribution",
+        "other"
+      ],
+      "title": "UnsupportedCategory",
+      "type": "string"
+    },
+    "UnsupportedRequest": {
+      "additionalProperties": false,
+      "description": "A requirement the generator cannot build. Shown to the user; never silently dropped.",
+      "properties": {
+        "schema_version": {
+          "default": "0.1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "requirement": {
+          "description": "What the user asked for, in the planner's words (one line, shown to people).",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Requirement",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/UnsupportedCategory"
+        },
+        "reason": {
+          "description": "Why it is not part of the app (one line).",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "alternative": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the app does instead, if anything (one line).",
+          "title": "Alternative"
+        }
+      },
+      "required": [
+        "requirement",
+        "category",
+        "reason"
+      ],
+      "title": "UnsupportedRequest",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The application a user asked for: a name, 1 to 12 static screens and how they connect.\n\nRules beyond the field limits: screen ids are unique ignoring letter case; start_screen (default:\nthe first screen) exists; every navigation target exists, is not its own screen and is not\nrepeated on a screen; every screen can be reached from the start screen by pressing buttons.\nRequirements that cannot be built are listed in unsupported_requests, never dropped. The package\nname and all Android settings are not part of this document (they come from AndroidTarget).",
+  "properties": {
+    "schema_version": {
+      "default": "0.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "app_name": {
+      "description": "Display name of the app (display text, up to 50 characters). Proposed by the planner, shown to the user, used as the project's name once approved.",
+      "maxLength": 50,
+      "minLength": 1,
+      "title": "App Name",
+      "type": "string"
+    },
+    "summary": {
+      "anyOf": [
+        {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "One or two plain sentences for the approval screen. Shown to people only; never put into code or resources.",
+      "title": "Summary"
+    },
+    "screens": {
+      "description": "The screens, 1 to 12.",
+      "items": {
+        "$ref": "#/$defs/ScreenPlan"
+      },
+      "maxItems": 12,
+      "minItems": 1,
+      "title": "Screens",
+      "type": "array"
+    },
+    "start_screen": {
+      "anyOf": [
+        {
+          "maxLength": 30,
+          "minLength": 1,
+          "pattern": "^[A-Z][A-Za-z0-9]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Id of the screen the app opens on. Defaults to the first screen.",
+      "title": "Start Screen"
+    },
+    "unsupported_requests": {
+      "description": "Everything the user asked for that the generator cannot build.",
+      "items": {
+        "$ref": "#/$defs/UnsupportedRequest"
+      },
+      "maxItems": 20,
+      "title": "Unsupported Requests",
+      "type": "array"
+    }
+  },
+  "required": [
+    "app_name",
+    "screens"
+  ],
+  "title": "AppSpec",
+  "type": "object"
+}

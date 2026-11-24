@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "ProblemSeverity": {
+      "enum": [
+        "error",
+        "warning"
+      ],
+      "title": "ProblemSeverity",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One thing wrong with (or worth knowing about) a structured document.\n\nProducers: any validator of a contract document (the first one is ``AppSpec``). Consumers:\nwhoever has to correct the document (the planner's retry loop) or show the reason (the UI).\nOwnership of the model is to be confirmed under ``docs/TEAM_WORKFLOW.md``.",
+  "properties": {
+    "schema_version": {
+      "default": "0.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "path": {
+      "maxLength": 200,
+      "pattern": "^$|^[a-z_][a-z0-9_]*(\\[[0-9]+\\])?(\\.[a-z_][a-z0-9_]*(\\[[0-9]+\\])?)*$",
+      "title": "Path",
+      "type": "string"
+    },
+    "code": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+      "title": "Code",
+      "type": "string"
+    },
+    "message": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Message",
+      "type": "string"
+    },
+    "severity": {
+      "$ref": "#/$defs/ProblemSeverity",
+      "default": "error"
+    }
+  },
+  "required": [
+    "path",
+    "code",
+    "message"
+  ],
+  "title": "ValidationProblem",
+  "type": "object"
+}
