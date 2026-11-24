@@ -961,6 +961,293 @@ so a ZIP and a directory with the same content have the same value.
 
 The mutation harness is a throwaway script kept outside the repository.
 
+## Project analysis (Phase 6, M2A)
+
+`androai_codegen.analysis` reads an imported Android project and returns an **evidence-backed report**: modules, build settings,
+dependencies, manifest components, class roles, Compose screens, layouts, bindings, navigation, storage, network, dependency
+injection, and a relationship graph over them. It is the second stage of the "modify an existing project" work and the first that
+*understands* a project; it still changes nothing, calls no LLM and builds nothing. M2B (retrieval, change-impact, planner
+hand-off) is a separate stage and is **not** part of this one.
+
+```python
+from androai_codegen.analysis import AnalysisConfig, analyse_import, analyse_mapping, analyse_workspace
+
+report = analyse_import(import_result)                 # honours the import's protected files
+report = analyse_workspace(workspace, protection=..., config=AnalysisConfig())
+report = analyse_mapping({"app/build.gradle.kts": "...", ...})     # an in-memory project (tests)
+
+report.complete            # False when something that could hide facts could not be read
+report.facts, report.relationships, report.limitations, report.stats, report.fingerprint
+index = report.index()     # query helpers (below)
+```
+
+### The three statuses
+
+Every fact and every relationship has a `status`, a `basis` (manifest, gradle, source, resource, layout, navigation, heuristic)
+and a rule that the model **enforces** (a fact that breaks it cannot be built):
+
+| Status | Meaning | Required |
+|---|---|---|
+| `confirmed` | the project's own text states it: a declaration, a manifest entry, a build line, an annotation resolved by its import (or written with its package), a type resolved by import or package, a value read through a version catalog or a `buildSrc` constant | at least one `Evidence` (path, line, an excerpt of at most 80 characters) |
+| `inferred` | concluded by a rule that can be wrong: a name that matches a framework class but is not imported, a role inherited through a class matched only by name, a screen guessed from its name | a `note` saying what was assumed |
+| `unknown` | exists but cannot be read statically: a convention plugin, a computed route or SDK level, an alias the catalog does not define, an unparsable file | a `reason` |
+
+**Only presence is claimed.** A report never says something is absent. `ReportIndex.observation(kind, subject)` answers
+`observed`, `unknown` or `not_observed`, and answers `not_observed` only when nothing the analyser could not read could be hiding
+a fact in that scope (`unknown` otherwise). Even `not_observed` means "no such fact was found", not "the project cannot".
+**Known exceptions, all about members.** Members are reported for application code only, so `not_observed` for a member of a test or
+build-logic class says nothing: it is never read. The member parser also misses some declarations without saying so, and for those
+`observation()` answers `not_observed` while the report is `complete=True`; no limitation records the gap, and this analysis does not
+change the parser. In Kotlin: an extension property whose getter has an expression body (`val String.len get() = 1`), a generic
+extension property (`val <T> List<T>.second get() = this[1]`), a destructuring declaration (`val (a, b) = pair`; Kotlin allows one only
+in scripts and function bodies, and the parser skips it where it finds it) and a backtick-named member. In Java: a field declaration
+with several declarators is parsed incompletely, so `int a, b, c;` reports one of the three names (`c`) and `String name = "x", other;`
+reports `name` only. What the parser does notice is reported: a member list cut at the limit is `unknown` (see "Unreadable is not
+absent"), and a declaration it cannot read exactly is marked. A member query that answers `not_observed` is therefore a statement about
+the declarations the parser reads, not about the source.
+
+Facts are keyed `<kind>:<subject>`. Two extractors that see the same thing add evidence to one fact (a manifest entry and the class it
+names; a dependency line and an import of the same library). Merging is independent of order: the stronger status wins, evidence
+and tags are unions, a tuple attribute is a union, a scalar conflict, a note and a basis take the smaller value.
+
+### What is extracted
+
+| Group | Fact kinds |
+|---|---|
+| Build (M2.3) | `module`, `module_type`, `gradle_plugin`, `sdk_level` (min, target, compile), `build_feature` (compose, viewBinding, dataBinding...), `dependency`, `dependencies` (unknown when unreadable), `module_dependency`, `version_catalog`, `build_source`, `technology` (libraries, from build coordinates **and** from imports) |
+| Manifest (M2.4) | `application`, `activity`, `activity_alias`, `service`, `receiver`, `provider`, `permission`, `permission_defined`, `uses_feature`, `meta_data`, with exported flag, launcher, intent actions and categories, deep links |
+| Source (M2.1, M2.2) | `file`, `type` (nested at any depth, local types left out), `member` (functions, properties, fields, constructors; companions flagged), `type_members` (unknown when a header could not be read or the member list was cut at the limit); annotations with arguments |
+| Roles (M2.4) | `fragment`, `viewmodel`, `worker`, `adapter`, `custom_view`, `paging_source`, and the manifest kinds above from source; inherited through project classes |
+| UI (M2.5) | `composable`, `compose_screen`, `compose_route` (string and typed, start destination, arguments), `deep_link`, `navigation` (unknown: computed routes, Navigation 3), `nav_graph`, `nav_nested_graph`, `nav_destination`, `layout` (variants folded), `binding` |
+| Data (M2.6) | `room_database`, `room_entity`, `room_dao`, `room_migration`, `room_policy`, `retrofit_service`, `http_endpoint`, `http_interceptor`, `base_url`, `shared_preferences`, `datastore`, `file_storage`, `sqlite_helper` |
+| DI and architecture (M2.6) | `hilt_application`, `hilt_android_entry`, `hilt_viewmodel`, `hilt_worker`, `hilt_entry_point`, `di_module`, `di_binding`, `di_injectable`, `di_assisted_factory`, `dagger_component`, `koin_module`, `koin_definition`, `koin_start`; ViewModel use and state holders |
+| Graph (M2.7) | relationships: `contains`, `declares`, `extends`, `implements`, `references`, `role_of`, `implemented_by`, `uses_layout`, `uses_binding`, `uses_view`, `includes`, `hosts_fragment`, `hosts_content`, `renders`, `navigates_to`, `starts_at`, `injects`, `provides`, `bound_to`, `uses_viewmodel`, `contains_entity`, `exposes_dao`, `accesses`, `uses_model`, `declares_endpoint`, `loads_module`, `depends_on`... |
+
+Tags (`module:`, `source_set:`, `lang:`, `scope:test`, `scope:build_logic`, `role:`, `layer:` ui, presentation, data, network, di, app,
+android_component, `entry-point`, `launcher`) are derived from what the code **is**, never from a class or package name.
+
+Query helpers (`ReportIndex`): `of_kind`, `with_tag`, `in_file`, `in_module`, `named`, `members_of`, `outgoing`, `incoming`,
+`targets`, `sources`, `reachable`, `path` (shortest, deterministic), `explain` (a fact with its evidence, edges and the limitations
+that bear on it), `unknowns`, `inferred`, `observation`.
+
+### Rules and where they are tested
+
+| Rule | Behaviour |
+|---|---|
+| Nothing executes | Build scripts, manifests, layouts and sources are **read as text**. The package imports no `subprocess`, `multiprocessing`, `ctypes`, `runpy`, `importlib`, `pickle`, `socket`, `http`, `urllib.request` or threading module and calls no `eval`, `exec`, `compile`, `open`, `os.system`, `os.popen`, `os.exec*` or `os.spawn*` (an AST test enforces it); a test analyses projects whose scripts try to run programs while every process-starting and connecting function is replaced by one that fails. It writes nothing, and it imports only the standard library, pydantic and `androai_codegen` (nothing from the orchestration, storage, android-tools or contracts packages). |
+| Secrets | No *recognisable* secret reaches a report (the guarantee is for secrets with a shape; see the end of this row). Token formats and private keys are scrubbed from every string; in URLs, `user:password@`, secret-looking query values **and opaque path segments** are masked: a Telegram bot token (`/bot<id>:<token>/`), a Slack or Discord webhook path, and any path segment of 12 or more characters that is not made of ordinary words (hex, base64, a UUID, letters mixed with digits), so `https://api.telegram.org/bot123456789:AAH.../` is recorded as `https://api.telegram.org/bot[REDACTED]/` and `services/T0A1B2C3D/B0E1F2G3H/x7Yq...` as `services/[REDACTED]`, while `/v1/users/{id}/notes` is untouched; this applies to fact ids, subjects, attributes, notes, reasons and limitation scopes as well as to excerpts; a `meta-data` value whose name looks secret (`key`, `secret`, `token`, `password`, `credential`, `auth`) is recorded as `[REDACTED]`, also in its excerpt, and under any other name a value, or the part of it, that *looks generated* is masked (`id=<32 hex digits>` becomes `id=[REDACTED]`, a bare hex id or UUID becomes `[REDACTED]`); in a URL, or in any text holding `?name=value`, `&name=value`, `;name=value` or `#name=value` (the name may carry brackets: `s[]=`, `filter[id]=`), a value that looks generated is masked **whatever the parameter is called** (`?s=[REDACTED]`, `/page;jsid=[REDACTED]`): a value that contains `/` (or its encoding `%2F`) is cut at the slashes and each piece is judged the way a URL path segment is: a piece of 12 or more characters with an unusual word in it is masked on its own and the pieces around it stay (`next=/users/[REDACTED]/profile`), while a short piece that only looks unusual (`u1234`, `v8a`, `ab12cd34`) is not evidence of anything and stays, so `lib/arm64-v8a/libnative.so`, `abi=armeabi-v7a/arm64-v8a/x86_64` and `next=/users/ab12cd34/profile` are kept; standard base64 contains `/`, so short pieces that a slash may have cut out of a token are judged together with their neighbours, and only on evidence: pieces that are not names and hold a capital letter, side by side with no plain word between them and 12 or more characters in all outside plain words (`Ab3dE5gH/jK9mN1pQ`), or such a piece next to a piece that was masked (`<13 characters>/K7MDENG`), are masked as one token (measured: 90 to 96 per cent of random base64 tokens that contain `/` are hidden completely, the rest keep a piece of at most 11 characters, see the fourth correction); punctuation after it is kept (`f(url?s=[REDACTED])`); a query that is only a token (`?<32 hex digits>`) is masked the same way, after a `?` only; ordinary values (`?page=2&sort=name`, `?v=1.2.3-SNAPSHOT`, `redirect_uri=https%3A%2F%2Fexample.com`) are kept; **an excerpt hides a string literal that is long (over 40 characters) or one unbroken token (16 or more characters of letters, digits and `+/_=-.`), and in any other string literal it masks each generated-looking token and keeps the words around it** (`"user:<32 hex digits>"` becomes `"user:[REDACTED]"`). *Looks generated* is judged per piece (a URL path segment, or what lies between two slashes of a value): 12 or more characters of letters, digits and `._~+=%-` in which some word (split at `._~+=-` and at percent escapes such as `%20`) is not an ordinary word, a camelCase name, an all-capitals word such as `SNAPSHOT`, a time stamp part such as `15T10` or a number of up to 15 digits: hex, base64, a UUID, letters mixed with digits and a number of 16 or more digits all qualify. The rule looks at the piece alone, so a long name with one short unusual word in it (`app-arm64-v8a-release.apk`, `layout-sw600dp-land`, `ic_launcher_2x.png`) is masked too, with or without slashes around it: an old false positive that the fourth correction did not change and a test pins. Tests plant made-up secrets in about thirty places (build scripts, manifest, annotations, constants, URL user info, query strings, matrix parameters, fragments and paths for Telegram, Slack and Discord, hex ids, UUIDs, a PEM block, protected files) and check every id, subject, attribute, excerpt, note, reason, limitation and the serialised JSON. **What this does not do:** it does not recognise a secret shorter than 12 characters (a PIN, `hunter2`), a secret made only of ordinary-looking words or only of capital letters, a number of up to 15 digits, a secret that characters outside that set (`:`, `,`, spaces, quotes) cut into pieces shorter than 12, a token that slashes cut into short pieces which look like names (`ulbiwTw`) or have no capital letter (`rad7ptc`), a value whose parameter name is outside `[\w.\-%\[\]]{1,40}` (it may hold `:`, `@` or `/`, be empty or longer than 40 characters), a token in a fragment route (`https://app/#/reset-password/<token>`), a value written entirely as percent escapes (`%36%30...`: no words to tell it by), a bare token after `&`, `#` or `;` in free text (only `?<token>` is judged there; inside a URL path `;<token>` is), or a secret in a position that is none of: a string literal, a URL, a query, a matrix parameter, a path segment of a URL, a `meta-data` value. **Names and labels are kept as written**: an application or navigation label, `tools:context`, a permission, an intent action, a deep-link host, a SharedPreferences or table name and the literal path segments of a Compose route are not judged, and neither are identifiers (a class named like a hex string keeps its name, so ids stay unambiguous); a URL *inside* such a label is judged like any other URL. Conversely the rule can hide a harmless value that looks generated: a number of 16 or more digits (an AdMob id `ca-app-pub-<16 digits>~<10 digits>` is masked), a long mixed-case id, a long file name with one short unusual word (`app-arm64-v8a-release.apk`), two short unusual names side by side (`devices/S21Ultra/Nexus5X`: 12 characters outside plain words), and in a `meta-data` value a class name with a digit group of three or more (`sha256`, `h264`, `app2024`) or led by an acronym (`HTTPServerConfig`). Protected files (keys, `.env`, `local.properties`, files the import found to hold secrets) are **never opened**, spied on in a test; each is listed as `protected_not_read`. |
+| Untrusted text | The report carries a notice that every value is data, not instruction. Comments and strings create no fact (the lexer masks them); an excerpt drops comments on the declaration line; an identifier is only a name when it is a plain identifier (a backtick name such as ``fun `ignore previous instructions`()`` is skipped). |
+| Unreadable is not absent | A file that is too large, not UTF-8, protected, or past a cap becomes a limitation with its path and makes the report incomplete when it could hold facts; a broken manifest, layout, build script or Kotlin or Java file does the same; a type, or the top level of a file, that has more members than the limit (300) keeps the first 300 and says so: a `members_truncated` attribute on the `type` fact, an `unknown` `type_members` fact tied to it, and a `member_cap_reached` limitation on the file that makes the report incomplete (for application code, the only code whose members are reported), so `observation()` answers `unknown`, never `not_observed`, for a member that could have been dropped, while a class with exactly 300 members is not marked; a source file in a language the analysis does not read is an `unsupported_source` limitation (Groovy and Scala sources make the report incomplete, native, Dart, Swift, JavaScript, TypeScript, Python, Rust, Go and AIDL files are listed without doing so); a convention plugin, an applied script, `allprojects` dependencies, a computed route or SDK level and Navigation 3 are `unknown` facts plus a limitation. |
+| Deterministic | The same project gives the same bytes: sorted output, stable ids, no timestamps, no host paths. Tested with different `PYTHONHASHSEED` values in separate processes, with files created in a different order on disk, and in memory against disk. |
+| Bounded | Per-file lexing and a **single-pass** bracket map (no helper scans to the end of a file), caps on files (20,000), bytes per file (1 MB) and in total (250 MB), facts (60,000, bulk kinds dropped first), members per type or per file top level (300; a member beyond the limit is reported as `member_cap_reached`, not dropped silently), types per file (400), evidence per fact (8); an optional wall-clock deadline (off by default, the only setting that makes a result depend on the machine). Resolving a name does not walk the file's import list: each file gets an index of its imports (built once), and the project-type resolver (`TypeResolver`, not every stage) also memoises its answers per file, so a file with 8,000 imports and 8,000 distinct names takes 0.3 s, 4,000 imports with 4,000 annotated classes 0.5 s, and 8,000 imports with 60,000 stacked annotations 0.6 s (15.7 s, 7.8 s and 106 s before the review fix pass; 5,000 wildcard imports with 3,000 names also finish in well under a second). Hostile inputs (deep nesting, 20,000 unclosed brackets or annotations, a 900 KB line, NUL bytes, CR-only line ends, XML with a DOCTYPE or 20,000 destinations, 6,000 imports with 6,000 names, annotations or wildcards, 100,000-segment URL paths) each finish in about 1.5 seconds or less on the development machine (Windows, Python 3.12); the tests allow 20. **Not linear everywhere:** matching Compose destinations to `navigate` calls grows faster than the input (2,000, 4,000 and 8,000 destinations, each navigated to once: 0.7 s, 1.8 s, 5.5 s); see the limitations. |
+
+### Limits and defaults (`AnalysisConfig`)
+
+`max_files` 20,000; `max_file_bytes` 1,000,000; `max_total_bytes` 250,000,000; `max_facts` 60,000; `max_members_per_type` 300 (per type and for a file's top level);
+`max_types_per_file` 400; `max_evidence_per_fact` 8; `deadline_seconds` None.
+
+### Known limitations (M2A)
+
+* **Lexical analysis, not a compiler.** Names are resolved by import, package and unique simple name; there is no type inference,
+  no overload resolution, no Kotlin scoping beyond that, no `typealias` or import-alias following for project types or base classes (an *annotation* imported under another name, `import androidx.room.Dao as RoomDao`, **is** recognised when the import resolves to a catalogued annotation), and a
+  declaration the parser cannot read exactly is marked (`exact` false, an `unknown` `type_members` fact) rather than guessed; a
+  type or file with more than 300 members keeps the first 300 and is marked the same way (see "Unreadable is not absent").
+  Code inside function bodies, lambdas and initialisers is not a class member; a class declared inside a function is not reported;
+  a backtick-named member (tests) is skipped; a Kotlin header longer than 4,000 characters is cut.
+* **Not modelled:** Kotlin Multiplatform source sets, Navigation 3, data-binding expressions (`@{...}`; layouts that use them are
+  marked), Safe Args and view-binding classes (the Kotlin and Java code that the build generates is not in the sources: the report
+  says `annotation_processor_output_not_analysed`), Compose navigation built by a function it cannot see, dynamic Groovy.
+  A build that hides its settings behind a convention plugin gives `unknown` module types, SDK levels and dependencies.
+* **Version catalogs:** only the default `libs` catalog; a custom or remote catalog leaves its aliases `unknown`. `buildSrc`
+  constants are read only when they are a plain `const val` on its own line.
+* **Reused parsers have limits of their own, found by this work and left unchanged** (`review/` was not modified): the SDK
+  readers take the first number after `minSdk`, so `minSdk = 21 + 3` reads as 21 (the analysis refuses to *confirm* such a line);
+  `unparsed_dependency_calls` counts a `ksp { ... }` or `kapt { ... }` configuration block as a dependency it could not read (the
+  analysis discounts those blocks); the navigation scan sees only a bare `composable(...)` inside a builder (the analysis also reads
+  `builder.composable(...)`); `Workspace.iter_files` skips **every** directory named `build`, even a source package. These are
+  Role 3's to fix in the review engine later.
+* **Heuristics are marked as such:** a screen named like `HomeScreen`, a role inherited through a class matched by name, a binding
+  class whose import is missing, a Safe Args method mapped to an action id, a fragment passed to `replace`/`add`/`show`. Each is
+  `inferred` with a note.
+* A short secret that has no tell (`val x = "abc"`) cannot be recognised and could appear in a *short* string in an excerpt; long or
+  token-like strings are hidden (see Secrets). In a URL **path** only segments of 12 or more characters are judged: a shorter secret
+  there is kept, and a long harmless identifier made of digits, capitals and letters is hidden. The Telegram, Slack and Discord
+  shapes are matched exactly; other services that put a secret in the path are caught only by the opaque-segment rule.
+* **Languages not read:** Groovy and Scala *sources* (Groovy build scripts are read), C and C++, AIDL, Dart, Swift, JavaScript,
+  TypeScript, Python, Rust and Go files are not analysed. Each is an `unsupported_source` limitation (up to 100 listed per group,
+  the rest summarised under `project`; the total is in `stats.files_not_read["unsupported_source"]`). Groovy and Scala make the
+  report incomplete, because they can define components, entities and screens; the others are listed without doing so. Kotlin
+  Script (`.kts`) outside build files is read as text but not parsed as source.
+* **Scaling that is not linear:** resolving imports, names and annotations is (see Bounded), but matching Compose destinations to
+  `navigate` calls grows faster than the input: 2,000, 4,000 and 8,000 destinations, each navigated to once, took 0.7 s, 1.8 s and
+  5.5 s. The optional `deadline_seconds` stops such a run and says so.
+* The tail index that resolves a name through a wildcard import covers the last six segments of a type's name; a name written
+  with a longer path relative to a wildcard is not resolved that way (it falls back to a unique simple name, as before).
+* Overlap with orchestration: Person 2's `intelligence.analyze_project` (regex based) and project index are separate and unchanged;
+  nothing imports across the two, and the shapes differ. Joining them is a later, deliberate step.
+
+### Phase 6 M2A verification (`p3/phase6a-analysis`, based on `origin/main` at `7237e19`)
+
+| Check | Result |
+|---|---|
+| Baseline on `7237e19` (Windows, before any change) | 2262 passed, 20 skipped, 1 xfailed |
+| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen packages/contracts` | **3504 passed, 20 skipped, 1 xfailed** (204 s). **1,242 new tests**, the same skips and xfail: 99 for the fourth correction (slash-containing values), 257 for the third correction (query values), 260 for the F2 follow-up (generated values), 131 regression tests for the review fix pass, 108 edge cases found by mutation testing, 46 for the F1 follow-up (member truncation), 61 text helpers and annotations, 61 safety, 43 model and store, 36 build, 33 storage/network/DI, 33 UI and navigation, 24 members, 21 components and roles, 21 graph and query, 8 import and generator integration |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4), export of the working tree | **3523 passed, 1 skipped (NTFS junctions), 1 xfailed** (78 s); the 1,242 analysis tests alone take 33 s; the serialised reports of twenty-four projects (the four fixtures, the two secret projects, the generated-value sweep, four truncation projects, an unsupported-source project, seven query-value projects and five slash-value projects) are byte-identical on Windows and Linux, each under four hash seeds (0, 1, 31337, random) |
+| `ruff check` (whole codegen package, Windows and Linux), `ruff format --check` (38 files: the analysis package and its tests), `compileall` | clean |
+| Files | 21 new modules (7,647 lines) in `analysis/`; 16 new test files and `analysis_fixtures.py`; **two existing files changed**: `packages/agent-core/codegen/pyproject.toml` (+4 lines: a per-file `E501` exemption for Android sources embedded as test input, like `sample_project.py`) and this document. `review/`, `ingest/`, the shared contracts and every other role's modules are untouched |
+| Mutation testing (Windows; mutants are generated from the code's own AST: comparison and boolean flips, negated conditions, dropped return values and effect calls; the analysis tests run against each in an isolated copy) | four independent samples of 450 mutants each (the first drawn from 2,445 mutation sites, the later ones from about 2,360 as code was simplified): **74.9%** killed on the first run, then **84.9%**, **90.7%** and **92.0%** on three fresh seeds as gaps and bugs were closed. Re-running the survivors against the final tests: 14 of 36 more killed; the 22 left were classed as equivalent or impractical (a guard on two values that are always `None` together, a boundary on a value that cannot occur, a frozen-dataclass flag, an argument always passed explicitly, a memory-only trim, a performance shortcut). **The independent review corrected two of those claims:** one survivor was not equivalent (it hid that an aliased annotation import was not recognised: now supported and tested) and the empty-first-line boundary was a missing test (now added). **Fix pass:** the five modules it changed (`resolve`, `text`, `annotations`, `members`, `analyser`; 901 sites) were mutated again: 350 of 400 killed on the first run (87.5%); the survivors in the new code (the suffix table, the overflow summary, the alias name, the `where` flag, the 12- and 200-character path limits, the side a wildcard lookup walks, URL case folding) were closed by 33 more tests; a fresh independent sample of 350 then gave **324 killed (92.6%)**. Every survivor in code this pass wrote is an equivalent mutant (an early exit whose fall-through gives the same answer, a tie that cannot occur, `None` returned for `False`). The other survivors are in code this pass did not touch; several are real gaps in the first implementation's tests rather than equivalents (the file-size cap boundary, the "more files were skipped" summary, the list of unreadable files, the member-count caps) and are left as they were. **Follow-up (F1, F2):** the code that pass changed (`symbols`, `text`, `components`, `members`) was mutated again: 236 of 250 killed (94.4%) and 132 of 150 (88.0%); the one survivor in new logic (the 40-character boundary of the excerpt rule) is now killed by a test, and the others are equivalent (a search that finds nothing at the end of the text, a default flag that is always passed, `None` for `False`) or in code that pass did not touch (type attribute emission, old parser corners). **Third correction:** `text.py` was mutated in full (181 sites): 174 killed (96.1%); the 7 survivors are equivalent (`None` for `False`, a `strict=` flag on lists of equal length) or in old code that pass did not touch (a frozen-dataclass flag, evidence line numbers, span splitting). **Fourth correction:** `text.py` was mutated again (200 sites): 193 killed (96.5%); the 7 survivors are `None` for `False`, a boundary on a piece with exactly one unusual character (`_could_be_cut_base64`: `> 0` against `> 1`, which only matters for a one-character piece such as `X`), and old code this pass did not touch (a frozen-dataclass flag, evidence line numbers, the excerpt span start). Not run on Linux |
+| Real problems the work found and fixed | **Secrets:** an evidence excerpt showed the raw source line, so `https://user:password@host/?key=...` and a literal such as `= "s3cr3t..."` could reach a report: URL credentials and secret-looking query values are now masked everywhere, and excerpts no longer echo long or token-like string literals; a secret-named `meta-data` value is hidden in its excerpt too. **Parser:** a body-less `class A` or `interface A` followed by a newline read the *next lines as its header* (so later members were lost and it could adopt the next class's body); an untyped delegated property (`val vm by viewModels<X>()`) lost its delegate; a return type before `}` in a one-line body was misread; a `typealias` was marked unreadable; a project class named like a framework class was taken for the framework class. **Performance:** annotations were located in quadratic time (20,000 stacked annotations timed out), property names scanned to the end of the file (22 s on a 1 MB file), and evidence excerpts were re-split or re-masked per fact (18 s on a 20,000-destination graph): all now about a second. **Honesty:** `minSdk = 21 + 3` was confirmed as 21 (it is not a literal); `ksp { }` blocks made dependencies look unreadable; `builder.composable(...)` produced neither a route nor an unknown. **Determinism:** a zero deadline could pass unnoticed on a coarse clock (`>=`); equal-strength merges kept the first note and basis (now the smaller, so order never matters); a claim whose code forgot to say why was silently given a default note (still repaired, but now named and refused by the test helper) |
+
+### M2A review fix pass (before any commit)
+
+An independent, read-only review of the first implementation found three blocking defects, three smaller ones and one untested
+boundary. A targeted pass fixed exactly those. Every fix has regression tests that fail when the fix is taken out (checked by reverting
+each one in a scratch copy of the package); `review/`, `ingest/`, the shared contracts and other roles' modules were not touched.
+
+| Finding | Fix | Evidence |
+|---|---|---|
+| **B1** Every name lookup walked the file's whole import list (annotations did it twice), so imports × names was quadratic | `resolve.py`: a per-file `ImportIndex` (explicit imports by simple name, the first one wins; wildcard packages by position; each "does anything import `org.koin...`" question answered once), a tail index of project types so a wildcard lookup walks the shorter of "packages holding this name" and "wildcards imported", and, for the project-type resolver (`TypeResolver`) only, a per-file memo of its answers (`resolve_known` uses the index alone). The Compose index and the DI helpers use the index too; the layout binding scan builds its own per-file maps once per file (it was only made to compute its wildcard test once, not to use the index); other stages have no memo. One deliberate change: a package imported twice by wildcard no longer makes a name ambiguous | 8,000 imports × 8,000 names **15.66 s → 0.28 s**; 4,000 imports × 4,000 annotated classes **7.76 s → 0.48 s**; 8,000 imports × 60,000 stacked annotations **106.51 s → 0.64 s**. Tests count how often a file's import list is iterated (at most 3 times for 3,000 names), compare both resolvers with the old scan on 600 random files (over 20,000 questions each) and run the probes end to end with bounds the old code misses |
+| **B2** Secrets in URL paths reached fact ids, subjects and attributes (a Telegram bot token, a Slack webhook path) | `text.py`: `redact_path` (Telegram, Slack and Discord shapes, then any segment of 12 or more characters that is not made of ordinary words), used by `redact_url` and `mask_urls`; ids, subjects, attributes, notes and excerpts pass through `scrub` or `safe`, so all are covered. The host and readable route words are kept | Planted Telegram, Slack and Discord secrets (annotation paths, base URLs, a Gradle repository URL, manifest meta-data, an intent-filter path, a navigation deep link, a Compose route) appear in no id, subject, attribute, excerpt, note, reason, limitation or in the JSON; 16 secret path shapes are masked, 15 ordinary paths are unchanged, and paths with 100,000 segments or a 600,000-character segment are survived |
+| **B3** The documentation overstated the secrets guarantee, the speed and the file counts | This section's rows: the guarantee is stated with its limits, measured times replace "about a second", "two existing files changed", the mutation site count is explained | (this document) |
+| **N1** `class Holder<T> where T : Fragment` got a fragment role | `members.py`: a `where` clause ends the search for the supertype colon | `where` in all positions, with and without a real supertype, constructor modifiers before the colon, Java bounds unchanged |
+| **N2** `import androidx.room.Dao as RoomDao` then `@RoomDao` was not a DAO (Room and DI extractors) | `annotations.py`: an annotation whose import resolves to a catalogued name takes the catalogue's name (`name` keeps what was written) | Room and Dagger/Hilt projects written with aliases give the same facts and relationships as the plain ones; an alias of another library's class stays unrecognised |
+| **N3** Groovy, Scala and C++ sources were ignored and the report said `complete` | `analyser.py`: an `unsupported_source` limitation per file (100 per group, then a summary under `project`); Groovy and Scala make the report incomplete, native and cross-platform files do not; counted in `stats.files_not_read` | all 22 suffixes, the cap and the weight of the overflow, a project on disk, determinism, `observation()` says `unknown` rather than `not_observed` |
+| Empty first line | a missing test, not a code defect: the excerpt of a file whose first line is empty was already right | LF and CRLF, blank, whitespace-only, one-newline and empty files, and the evidence of a declaration below an empty first line |
+
+**Left as they were (not part of the approved pass):** matching Compose destinations to `navigate` calls is still superlinear (see the
+limitations); the review's smaller notes: a claim whose code forgot to say why still gets a default note in production (the test
+helper refuses it), `Fact.attributes` is a plain dict inside a frozen model, the `binary_not_read` code also covers text that is not
+UTF-8, a dead `"reference"` entry in the fact-cap drop order, and wall-clock bounds in tests (the new ones allow 4 to 8 s for runs that
+take 0.3 to 0.6 s here, but a very slow machine could still trip them).
+
+### M2A follow-up to the second review (F1, F2)
+
+A second read-only review found two more defects that the first review and the fix pass had missed. Both are fixed; nothing else was
+changed in this pass (the second review's non-blocking notes are still open, see below).
+
+| Finding | Fix | Evidence |
+|---|---|---|
+| **F1** A type or file with more than 300 members kept 300 of them and gave no sign: `complete=True`, no limitation, and `observation("member", ...)` answered `not_observed` for a dropped member. `TypeInfo.truncated` was set and never read, and it was also true for exactly 300 members | `members.py`: one collector per scope (a type, or a file's top level) that scans until a member *beyond* the limit is found, so the flag is exact and the work stays bounded at 301 members; companion members count towards their class. `symbols.py` reads the flag: a `members_truncated` attribute on the `type` fact, an `unknown` `type_members` fact with a `describes` edge (a type, or a file's top level), and a `member_cap_reached` limitation on the file that affects completeness. Only application code is marked (the only code whose members are reported): a test class with 400 methods does not make a report incomplete | 46 tests: 299, 300, 301, 400 and 1,000 members for Kotlin and Java classes and for top-level members, mixed properties, functions and constructors, companions, nested types, other limits, the report signals, `observation()` for a member beyond the limit (`unknown`) against one that is genuinely absent from a class of exactly 300 (`not_observed`), module scoping, tests and build logic, determinism |
+| **F2** A generated-looking value under an innocent name still reached the report: `?s=<32 hex digits>` in an excerpt, a bare or composite `meta-data` value, `"user:<32 hex digits>"` in an excerpt, `;jsid=<32 hex digits>` | `text.py`: the rule is by shape, not by name. A value that *looks generated* (see Secrets) is masked in `?`, `&`, `;` and `#` parameters, in the matrix parameters of a path (the key stays), inside short string literals of an excerpt (the words around it stay) and in `meta-data` values (`safe_value`, masked before clipping). All-capitals words (`SNAPSHOT`) and time stamp parts count as ordinary words, so versions and dates survive. Identifiers are not touched | 260 tests: the five reproduced cases and variations in every helper (`mask_urls`, `safe`, `redact_excerpt`, `redact_url`, `safe_value`), nine parameter names, four separators, five value shapes, the 11/12 character boundary, ordinary values kept, idempotence, hostile input (megabyte runs, 200,000 parameters), and a whole-report sweep over manifest, annotations, constants, base URLs, deep links, intent filters and a Gradle script that finds no planted value in any id, subject, attribute, excerpt, note, reason, limitation or the JSON |
+
+**Still open, not part of this pass:** the other notes of the second review: the fact cap trims the finished report and does not limit the work done before it, the type index costs more time and memory on very large projects (300,000 types: 2.4 s against 0.2 s), several old-code mutation survivors (the file-size cap boundary, the "more files were skipped" summary, the fact-cap boundaries), and the silent caps that are not about members (references per file, annotation arguments).
+
+### M2A third correction (query values and documentation)
+
+The final review reproduced four ways past the rule that masks `?name=<generated value>`; through plain `safe()` the values reached
+an application label, compose route subjects, attributes and `navigates_to` edge ids, a navigation label and `tools:context`. Only
+`text.py` changed (plus this document); the F1 truncation code and every earlier fix are untouched.
+
+| Finding | Fix | Evidence |
+|---|---|---|
+| Standard base64 in a query value (it contains `/`, so the value was never judged) | `/` joins a run, which is judged as a whole; the pieces are masked one by one when only part of the run looks generated (`build/<hex>/out` keeps its words), **and the whole run was masked when a piece that stayed was not a plain word, which also masked ordinary values: replaced in the fourth correction below**. The same judgement applies to `meta-data` values and short excerpt literals | slash values in every position and helper, including a value whose pieces are all shorter than 12 characters; AWS-style keys |
+| Bracketed parameter names (`s[]=`, `filter[id]=`) | the name pattern accepts brackets | six name shapes × three values × three positions |
+| A query that is only a token (`?<hex>`) | a token directly after a `?` is judged by shape (not after `?.`, `?:`, `&`, `#` or `;`, and not when `=` follows: that is a name), so Kotlin safe calls (`a?.b`), the elvis operator and ids with `#` are not matched; **the rule reads text, not syntax, so compact code can still be redacted: see the note below the table** | bare tokens of five shapes in four templates; twelve code and name lines left alone; ids with `#` and `?` unchanged |
+| A generated value followed by an unquoted `)` (or `]`, `}`, `,`, `.`, `!`, `:`) | punctuation after a value is kept apart from it | eleven tails × four values × three templates |
+| (found while fixing) ordinary percent-encoded values were masked: `redirect_uri=https%3A%2F%2Fexample.com`, `q=android%20studio%20tutorial` | percent escapes count as separators, like `-` | 17 ordinary queries come out unchanged (2 of 24 probe inputs were changed before); percent-encoded base64 is still masked |
+
+**Compact code can be redacted.** The `?`, `&`, `;` and `#` rules apply to any text that has the shape of a query, and compact source
+code has it: with no space between an operator and a long identifier whose name looks generated (12 or more characters with a digit
+group of three or more, for example), the excerpt of that line shows `[REDACTED]` in place of the identifier. Confirmed, through
+`redact_excerpt`: `if (a&&b==someVeryLongIdentifierName123) return` is shown as `if (a&&b==[REDACTED]) return` and
+`x=cond?someVeryLongMethodName2024():other;` as `x=cond?[REDACTED]():other;`. The same code written the way formatters write it
+(`a && b == name`, `cond ? name() : other`) is shown unchanged, and so are `a?.name` and `a ?: b`. What is affected is source text
+shown as written (an excerpt, or an attribute value taken from source). An identifier, an id or a subject is not masked as an
+identifier (ids with `#` and `?` come out unchanged in the tests), so no fact is renamed or lost. It needs both an unformatted
+expression and an identifier that looks generated, which should be uncommon in formatted Kotlin and Java; it was not measured over
+real projects, so no frequency is claimed.
+
+The report-level check repeats the review's sweep: a base64 value with `/`, an `s[]=` value, a bare token, a token followed by `)` and
+a control, planted in the application label, a compose route (declaration and `navigate`), a navigation label and `tools:context`,
+leave no planted value in any id, subject, attribute, excerpt, note, reason, limitation or the JSON. Twelve pieces of the change were
+reverted one at a time in a scratch copy of the package and each makes the new tests fail. Eleven of the twelve earlier fixture reports
+are byte-for-byte unchanged; one changed on purpose: an excerpt that used to hide a whole string because a value had escaped masking
+(`@GET("…")`) now shows it with the value masked (`@GET("page;jsid=[REDACTED]/x")`).
+
+Documentation corrected in this pass: the Secrets row (what is masked, how a value is judged, and what is **not**: names and labels, bare
+tokens after `&`, `#` or `;`, numbers up to 15 digits, pieces cut by `:` or `,`; `meta-data` rather than "a manifest value"), the sentence on
+the index (the layout binding scan does not use it), and the statement on `not_observed` (members of test and build-logic code, and the
+extension properties, destructuring declarations and backtick names the member parser does not recognise). **Two of those statements
+were still wrong after this pass and are corrected in the fourth correction below** (what is masked token by token, and that code is
+never touched), and the `not_observed` paragraph still claimed that everything else a member query can miss is reported.
+
+### M2A fourth correction (over-masking and documentation accuracy)
+
+The fourth review reproduced one blocker and three documentation errors. The blocker was introduced by the third correction: `/` joins a
+run so that standard base64 is judged whole, and the whole run was then masked whenever a piece that was not masked on its own was not a
+plain word. An ordinary value that carried one short unusual piece lost all of its words. Only `text.py` changed (`_mask_run`, plus a
+separator pattern); the F1 truncation code, the shared contracts and every earlier fix are untouched.
+
+| Value | Before | After |
+|---|---|---|
+| `safe_value("https://cdn.example.com/img/avatars/u1234/profile_picture.png")` | `https:[REDACTED]` | unchanged |
+| `safe_value("lib/arm64-v8a/libnative.so")` | `[REDACTED]` | unchanged |
+| `mask_urls("https://x.example.com/s?abi=armeabi-v7a/arm64-v8a/x86_64")` | `...?abi=[REDACTED]` | unchanged |
+| `mask_urls("https://x.example.com/s?next=/users/ab12cd34/profile")` | `...?next=[REDACTED]` | unchanged |
+
+**The rule now.** The run is cut at `/` and at `%2F` (a whole path in a query value is usually written `%2Fusers%2Fab12cd34`; before this
+pass `redirect_uri=https%3A%2F%2Fexample.com%2Fusers%2Fab12cd34%2Fprofile` was masked whole for the same reason). Each piece is judged on
+its own by the rule for a URL path segment: 12 or more characters with an unusual word in it is masked, nothing else is. A short piece
+that only looks unusual is not evidence. Because standard base64 contains `/`, pieces that a slash may have cut out of a token (a piece
+that is not a name and has a capital letter) are judged together with their neighbours, and masked as one token only when they have
+evidence: they sit next to a piece that was masked (`wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`, the example in AWS's documentation, is one
+token), or side by side they hold 12 or more characters outside plain words (`Ab3dE5gH/jK9mN1pQ`; twelve is the length from which a
+single segment is masked). A plain word, or a short piece without a capital letter, ends a group: `users/ab12cd34/posts/ef56gh78/likes`,
+`images/ab12cd/ef34gh` and `files/Ab3dE5gH/readme.md` are kept.
+
+**What it costs, measured** (random standard-base64 tokens that contain `/`, 1,500 per length class; "leak" = a piece of 6 or more
+characters still visible):
+
+| Token length (characters) | 16-23 | 24-31 | 32-47 | 48-88 |
+|---|---|---|---|---|
+| leak, third-pass rule (masked everything when in doubt) | 2.1% | 1.9% | 2.5% | 1.3% |
+| leak, now | 10.5% | 5.9% | 6.3% | 3.7% |
+
+The remaining leaks are pieces of up to 11 characters that a slash cut off and that look like an ordinary camel-case word (`ulbiwTw`, which
+has the shape of `userId`) or have no capital letter (`rad7ptc`); nothing in their shape tells them from a short id, which is exactly
+what the blocker asked to keep. The token as a whole never survives (a test checks 600 random tokens). A further
+rule (a short piece without a capital letter next to a masked piece also joins it) was measured and not adopted: it recovered under one
+percentage point. On the false-positive side, of 21 ordinary paths and values the third-pass rule changed 8 and the rule now changes one
+(`devices/S21Ultra/Nexus5X/specs`: two adjacent unusual names that add up to 12 characters, accepted on purpose).
+
+| Test group | What it pins |
+|---|---|
+| the four values | exact output, and unchanged through `safe`, `safe_value`, `scrub`, `mask_urls`, `mask_opaque_runs` and `redact_url` |
+| short ids | twelve ordinary paths (including two ids kept apart by words, capital letters, side-by-side lower-case ids) through every helper and as an excerpt literal; 4,000 random ordinary paths are never changed, also with `/` written `%2F` |
+| Android ABIs | `armeabi-v7a`, `arm64-v8a`, `x86_64`, `x86`, `armeabi`, `mips64`, `riscv64` in five shapes each, and all seven in one value |
+| mixed pieces | a generated piece is masked and the ordinary pieces around it stay, exact output (`build/<hex>/out`, a CDN path with `u1234` and a UUID, `abi/arm64-v8a/<hex>/x86_64`, camel-case names next to a hex id) |
+| base64 with `/` | short pieces, the AWS example, two pieces of 16 and 22, capital pairs, a token split by a word, with `/`, `%2F` and `%2f`; 600 random tokens at least 88% fully hidden |
+| the boundary | 11 unusual characters are kept, 12 are masked; plain words inside a piece do not count; a short id without a capital letter ends a group; separators around a masked group are kept as written |
+| percent-encoded URLs | nine ordinary URLs unchanged; five generated values masked, idempotently |
+| the report | label, `meta-data` values, a Compose route and a `navigates_to` edge keep ordinary values and carry no generated one (five secrets), checked in every id, subject, attribute, excerpt and the JSON |
+| excerpt literals | six ordinary literals kept, four generated ones masked |
+| hostile input | twelve slash-heavy inputs of 100,000 pieces through five helpers |
+| revert check | twelve pieces of the change reverted one at a time in a scratch copy: each makes tests fail (51 fail when the third-pass behaviour is put back) |
+
+Existing tests changed on purpose: the assertion that encoded the over-masking (`api/v2/items/7f3/<hex>` became a whole `[REDACTED]`; it is
+now `api/v2/items/7f3/[REDACTED]`) and two that expected percent-encoded base64 as one marker (it is now `[REDACTED]%2F[REDACTED]`, like
+the `/` form).
+
+**Documentation corrected in this pass.** (1) The Secrets row said that a partly generated value is always masked token by token and
+that ordinary values with slashes are kept; it now describes the boundary above. (2) The third-correction row said that code is not
+touched; it can be redacted when it is compact (see the note under that table, with two confirmed examples). (3) The `not_observed`
+paragraph said that everything else a member query can miss is reported; it now lists the Kotlin and Java declarations the parser skips
+(expression-bodied and generic extension properties, destructuring, backtick names, Java fields with several declarators) and says that
+`not_observed` can then come with `complete=True`. The parser itself was not changed.
+
+**Known limitations, recorded and not fixed here:**
+
+* a token in a fragment route is not judged: `https://app/#/reset-password/<hex>` keeps the token (a bare token is judged only after `?`);
+* a parameter name outside `[\w.\-%\[\]]{1,40}` (one with `:`, `@` or `/`, an empty one, one longer than 40 characters) hides nothing;
+* a value written entirely as percent escapes (`%36%30...`) has no words to tell it by and is treated as ordinary;
+* `members_of()` returns a list cut at the member limit without an indicator of its own (the `type_members` fact and the `member_cap_reached`
+  limitation carry it, as `observation()` does);
+* a long name with one short unusual word (`app-arm64-v8a-release.apk`, `layout-sw600dp-land`, `ic_launcher_2x.png`, `main.5f3c2a1b.css`)
+  is masked as a piece, with or without slashes, by a rule older than this pass (a test pins it so that changing it is a decision);
+* a short piece without a capital letter next to a masked piece is kept (`<hex>/ab12cd34`), and two adjacent short unusual names are masked.
+
+The mutation harness and the profiling and fuzz scripts are throwaway files kept outside the repository.
+
 ## Generation workflow, supported technologies, repair rules
 
 **Mostly not implemented yet** (Phase 5.3 and later, 6-8). Phases 5.1 and 5.2 added the project templates and the
