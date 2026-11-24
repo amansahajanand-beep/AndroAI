@@ -966,8 +966,9 @@ The mutation harness is a throwaway script kept outside the repository.
 `androai_codegen.analysis` reads an imported Android project and returns an **evidence-backed report**: modules, build settings,
 dependencies, manifest components, class roles, Compose screens, layouts, bindings, navigation, storage, network, dependency
 injection, and a relationship graph over them. It is the second stage of the "modify an existing project" work and the first that
-*understands* a project; it still changes nothing, calls no LLM and builds nothing. M2B (retrieval, change-impact, planner
-hand-off) is a separate stage and is **not** part of this one.
+*understands* a project; it still changes nothing, calls no LLM and builds nothing. M2B (entry points and flows, conventions,
+inventory and result: see "Project analysis (Phase 6, M2B)" below) was a separate stage and a separate review; retrieval of
+relevant files, change impact and the planner hand-off are later stages owned elsewhere.
 
 ```python
 from androai_codegen.analysis import AnalysisConfig, analyse_import, analyse_mapping, analyse_workspace
@@ -1021,6 +1022,8 @@ and tags are unions, a tuple attribute is a union, a scalar conflict, a note and
 | UI (M2.5) | `composable`, `compose_screen`, `compose_route` (string and typed, start destination, arguments), `deep_link`, `navigation` (unknown: computed routes, Navigation 3), `nav_graph`, `nav_nested_graph`, `nav_destination`, `layout` (variants folded), `binding` |
 | Data (M2.6) | `room_database`, `room_entity`, `room_dao`, `room_migration`, `room_policy`, `retrofit_service`, `http_endpoint`, `http_interceptor`, `base_url`, `shared_preferences`, `datastore`, `file_storage`, `sqlite_helper` |
 | DI and architecture (M2.6) | `hilt_application`, `hilt_android_entry`, `hilt_viewmodel`, `hilt_worker`, `hilt_entry_point`, `di_module`, `di_binding`, `di_injectable`, `di_assisted_factory`, `dagger_component`, `koin_module`, `koin_definition`, `koin_start`; ViewModel use and state holders |
+| Entry points and flows (M2B) | `entry_point`, `app_flow`, `flow_gap`, `intent_launch` (unknown); relationships `entry_point_for`, `starts_flow`, `reaches`, `has_gap`, `launches_activity`, `launches` (unknown), `calls_composable`, and `starts_at` from a `NavHost` to its start route |
+| Conventions (M2B) | `convention` facts by dimension: `language`, `ui_toolkit`, `app_structure`, `architecture`, `di`, `state`, `async`, `package_layout`, `naming`, `testing`, `formatting` |
 | Graph (M2.7) | relationships: `contains`, `declares`, `extends`, `implements`, `references`, `role_of`, `implemented_by`, `uses_layout`, `uses_binding`, `uses_view`, `includes`, `hosts_fragment`, `hosts_content`, `renders`, `navigates_to`, `starts_at`, `injects`, `provides`, `bound_to`, `uses_viewmodel`, `contains_entity`, `exposes_dao`, `accesses`, `uses_model`, `declares_endpoint`, `loads_module`, `depends_on`... |
 
 Tags (`module:`, `source_set:`, `lang:`, `scope:test`, `scope:build_logic`, `role:`, `layer:` ui, presentation, data, network, di, app,
@@ -1247,6 +1250,102 @@ paragraph said that everything else a member query can miss is reported; it now 
 * a short piece without a capital letter next to a masked piece is kept (`<hex>/ab12cd34`), and two adjacent short unusual names are masked.
 
 The mutation harness and the profiling and fuzz scripts are throwaway files kept outside the repository.
+
+## Project analysis (Phase 6, M2B)
+
+M2B extends `androai_codegen.analysis` with **entry points and application flows** (M2.9), **architecture and coding conventions**
+(M2.8), a **typed inventory**, a **result wrapper with deterministic JSON** and a **freshness check** (M2.10). Like M2A it changes no
+project, runs nothing, calls no LLM, builds nothing, writes nothing, stores nothing and adds no shared contract. Two things are left to
+other owners on purpose: a rendering of the inventory for a prompt, and retrieval of the files a change needs (Person 2's
+orchestration), and *where* a result is stored (Person 4). The package imports nothing from orchestration, storage or contracts.
+
+```python
+from androai_codegen.analysis import analyse_import_result, check_freshness, dumps_result, loads_result
+
+result = analyse_import_result(import_result)     # report + inventory + provenance + eligibility
+text = dumps_result(result)                        # canonical JSON; nothing is written
+again = loads_result(text)                         # size, nesting, schema, types, consistency
+verdict = check_freshness(again, workspace, protection=import_result.protection)   # fresh | stale | unknown
+```
+
+### What changed in the M2A code
+
+* `ANALYSIS_VERSION` is `m2b-1` (was `m2a-1`). The version is part of the report fingerprint, so **every report fingerprint
+  changes**; no test pinned one. A result made with another version is reported stale by `check_freshness`.
+* Two guarded steps run after `graph`: `flows`, then `conventions` (a failing step is an `extractor_error` limitation, as before).
+* `FactStore` gained read-only accessors (`status_of`, `attributes_of`, `tags_of`, `evidence_of`, `relation_items`) and
+  `report_fingerprint(report)` recomputes the fingerprint a report should carry.
+* New limitation codes `flow_cap_reached` and `intent_cap_reached`; **neither affects completeness**. The `unknown` status also covers
+  "too little evidence to describe" (a convention), which the model documentation now says.
+* `AnalysisConfig`: `max_flow_screens` (200), `max_flow_visited` (5,000), `max_flow_depth` (12), `max_intents_per_file` (300).
+* One M2A test changed on purpose: the Java/XML fixture "has no unknown facts" now allows `convention` unknowns (sparse evidence), and
+  checks that each says how little there was.
+
+### Entry points and flows (M2.9)
+
+| Rule | Behaviour |
+|---|---|
+| Entry points | An `entry_point` fact for every manifest component the system or another app can start: the launcher, the named Application class, and every component that is exported (`android:exported="true"`, or absent with an intent filter: `exposure` is `implicit`). `exported="false"` wins over a filter. Categories: `launcher`, `application`, `exported_component`, `deep_link`, `intent_action`. Always `confirmed`, from the manifest; a class the manifest does not declare is not an entry point |
+| Explicit Intents | `Intent(ctx, X::class.java)`, `new Intent(ctx, X.class)`, `setClass`, `ComponentName`: the target is a class literal that resolves to a project Activity. `confirmed` when the Intent is passed straight to `startActivity`/`startActivityForResult`/`launch`, or is assigned to a local that the same function starts; `inferred` ("not seen being started") when no start is visible. A class outside the project, or one that is not an Activity, makes no claim |
+| Implicit Intents | A string-literal action or `Intent.ACTION_*` is matched to the manifest activities whose intent filters declare it; a literal `Uri.parse("scheme://host/...")` narrows VIEW intents to activities with a matching deep link. Always `inferred`: Android decides at run time and another app may match |
+| Unknown, never an edge | A computed class or action (a variable, `javaClass`, a generic `T::class.java`, a custom `ACTION_*` constant, a template string) and an Intent built for a `PendingIntent` or a `TaskStackBuilder` are `intent_launch` facts, `unknown`, with a reason and a non-completeness `dynamic_navigation` limitation. `ActivityResultContracts`, reflection and `Class.forName` are not modelled |
+| Flows | `app_flow` per entry point: a bounded breadth-first walk over the existing navigation edges (Compose routes, XML graphs, Fragment transactions, `setContent`) and the Intent edges. It lists screens, not paths, with `screen_count`, `max_depth`, `inferred_screens`, `truncated` and `dynamic`; `reaches` edges are `confirmed` only when a path of confirmed links exists. Composable calls are followed to find a `NavHost`, which is linked (`inferred`) to the start route written inside the same composable. A limit reached, a computed Intent in a reached class, or a computed Compose route or Navigation 3 adds an `unknown` `flow_gap` and sets `truncated` or `dynamic`. A service or receiver that reaches no screen has no flow |
+| Bounds | depth 12, 200 screens listed and 5,000 nodes visited per entry point, 40 composable calls per composable, 300 Intents per file, and a total work budget for all flows; each is a limitation or a flag, never silence |
+
+Presence only: a screen missing from a flow was not reached by what the analysis can read.
+
+### Conventions (M2.8)
+
+| Rule | Behaviour |
+|---|---|
+| Evidence, not names | Architecture is read from structure M2A already derived: which screens use a ViewModel (`uses_viewmodel`), which interface a screen implements and which `*Presenter` receives it (MVP), which ViewModel has a state holder and takes one **sealed** event type (MVI), which classes injected into ViewModels reach a DAO or a service (repository) or are `operator fun invoke` classes (use case). A class or package called `Presenter` or `viewmodel` that nothing connects proves nothing |
+| Several at once, mixed is mixed | Each label has `support`, `total`, `percent`, `strength` (`dominant` from 70 %, `partial` from 30 %, `weak` below) and up to five examples. Two screen patterns each at 30 % or more give an `architecture|mixed` fact |
+| Sparse is unknown | A pattern needs 3 things to look at and 3 that share it (MVVM and MVP are measured against screens, MVI against ViewModels); the package layout needs 3 top-level packages with a known layer. Otherwise an `unknown` fact says how many were found |
+| Counts are confirmed, readings are inferred | Language, UI toolkit, structure, DI, state and async imports, test frameworks and formatting are plain counts: `confirmed`, with example paths. Architecture, package layout and naming habits are readings: `inferred`, with a note "N of M" |
+| Dimensions | `language`, `ui_toolkit` (per module), `app_structure` (single, multi, mixed), `architecture`, `di`, `state`, `async`, `package_layout` (by layer, by feature, mixed; layers come from what the classes are, and a DI annotation does not count as a layer), `naming` (suffix, mixed, unsuffixed), `testing`, `formatting` (indent style and width, line length p95 and a limit hint; at most 200,000 lines are read) |
+
+A missing label is "not observed"; no convention is a claim that a project is *not* written some way.
+
+### Inventory, result and freshness (M2.10)
+
+| Rule | Behaviour |
+|---|---|
+| Inventory | A typed view over the report, with no new extraction: sections identity, build, modules, languages and UI, components, permissions, screens and navigation, architecture, data and network, integrations, tests, a protection summary (what was not read, and the import's secret-finding counts, never values) and the limitations. Every entry names its `fact_ids` and carries evidence or the reason the fact has none; an entry without either cannot be built. At most 200 entries per section, with exact totals and counts. An `unknown` or `inferred` fact stays an entry with that status. There is no prompt rendering here |
+| Two fingerprints | `AnalysisReport.fingerprint` hashes the analysis **output**. `provenance.input_fingerprint` hashes the project **input**: a manifest with one entry per file (the SHA-256 of the analysed text for a file that was read, only the path for one that exists but was not read). They are different things and move independently (a binary file changes the input and not the output). The import's own `content_fingerprint` is recorded separately as provenance |
+| Eligibility | An import without an attestation, or no import at all, can still be analysed; the result then says `eligible_for_modification: false` and why. An import record that is eligible gives an eligible result that names the import and the attestation basis (not its text). Nothing creates or upgrades an attestation, and a result cannot claim eligibility without an import record |
+| JSON | `dumps_result`: sorted keys, compact, ASCII, one trailing newline, no timestamps, no host paths: the same analysis of the same project gives the same bytes on Windows and Linux and under any hash seed. `loads_result` checks size (64 MiB), nesting depth (64, scanned without recursion), JSON syntax (no repeated keys, no `NaN`), schema and exact types (no coercion), version, and that the result agrees with itself (stored fingerprints match the stored content, the inventory names facts that exist, eligibility has an import record). It raises `InvalidAnalysisResult` and executes nothing |
+| What `loads` cannot do | It cannot recompute the input fingerprint from JSON alone, and a result carries no signature: **a copy edited by hand together with its hashes is accepted**. There is no tamper detection; a test says so |
+| Freshness | `check_freshness(result, workspace_or_mapping)` re-reads the project with the same rules and the result's own configuration, and answers `fresh`, `stale` (files added, deleted or changed, at most 50 paths each, exact counts) or `unknown` (the project cannot be read, the stored manifest is inconsistent, or the analysis stopped at its file limit so files beyond it are not tracked). A different analysis version or configuration is `stale`. A protected file is never opened: it is listed by path, so it may change without making the result stale, and its disappearing is a deleted path |
+
+### Known limitations (M2B)
+
+* Flows are lexical: an Intent inside a lambda is attributed to its enclosing type or composable, a started Intent is recognised only when
+  it is an argument of `startActivity`/`launch` or a local that the same function starts, and an implicit Intent is a guess among
+  manifest filters. `ActivityResultContracts`, `PendingIntent`, `TaskStackBuilder`, reflection and a custom action constant are
+  `unknown`, not followed. Deep links declared only in a navigation graph or in Compose do not start a flow.
+* An exported-by-filter component is read from the manifest only; nothing here knows the target SDK's default for `exported`.
+* Conventions are readings with fixed thresholds (3 and 3, 30 % and 70 %). A project with fewer screens, ViewModels or packages gets
+  `unknown`. MVP needs a class named `*Presenter`; an MVP project that names it otherwise is not recognised. Formatting looks at indent
+  and line length only, not at a style guide.
+* The input fingerprint tracks the files the analysis read and the paths of the others. A binary file that changes does not make a
+  result stale, because the analysis never used it; a file larger than the read limit is only tracked by path.
+* Nothing is signed. `loads` is a consistency check, not a proof of origin.
+* Fixtures only: no real project of the owner's was available, so thresholds are calibrated on the generated and hand-written
+  fixtures and the three review fixtures, and **no real-project run is claimed**.
+
+### Phase 6 M2B verification (`p3/phase6a-analysis-m2b`, based on `origin/main` at `b4513ae`)
+
+| Check | Result |
+|---|---|
+| Windows 10, Python 3.12.10: `pytest packages/agent-core/codegen packages/contracts` | **3841 passed, 20 skipped, 1 xfailed** (428 on a busy machine; 260 on an earlier, quieter run with 60 fewer tests s); M2A was 3504 passed, 20 skipped, 1 xfailed |
+| Linux (WSL Ubuntu, Python 3.14.4, ext4), export of the working tree | **3860 passed, 1 skipped (NTFS junctions), 1 xfailed** (99 s) |
+| New tests | 337 (3504 + 337 = 3841 on Windows): `test_analysis_flows.py` (106), `test_analysis_conventions.py` (90), `test_analysis_result.py` (86), `test_analysis_m2b_robustness.py` (55) |
+| `ruff check` (whole codegen package), `ruff format --check` (47 files), compile of every source and test file | clean on Windows and Linux |
+| Determinism | the serialised reports and the canonical JSON results of 24 projects are byte-identical on Windows and Linux, each under four hash seeds (0, 1, 31337, random) |
+| Revert check (each piece of the new code reverted alone in a scratch copy) | 80 pieces of the new code reverted one at a time in a scratch copy: 79 make tests fail. The one that does not is an entry-point guard that the next line makes redundant (a class the manifest does not declare has no launcher or exported attribute, so it already yields no entry point) |
+| Mutation testing (AST mutants of `flows`, `conventions`, `inventory`, `result`, `freshness`) | a first sample of 500 gave 87.4 % killed; its survivors, and the revert check's, were closed with 60 more tests (277 of the 337 new tests existed before those two checks) and two dead branches were removed. A second, independent sample of 700 AST mutants killed **668 (95.4 %)**; its 32 survivors were re-run against the added tests: 22 more were killed and the remaining 10 are equivalent or defensive (frozen-model flags, an unused default value, `return False` for `None`, an unreachable `or`, a work-budget boundary, an unterminated string literal after `Uri.parse(`) |
+| Performance | the M2A probes still run in under a second (8,000 imports x 8,000 names 0.35 s, 4,000 imports x 4,000 annotated classes 0.55-0.64 s, 8,000 imports x 60,000 stacked annotations 0.73-0.76 s, against 0.30, 0.49 and 0.65 s for M2A; one run in six was disturbed by other load and is not counted); the new steps add 3.9 % (0.06 s) to a 1,500-file project and 4 to 20 % of a few milliseconds to the small fixtures; flows over a 3,000-composable chain, and a composable that calls 5,000 others, take well under a second each |
+| Real-project run | **none** (no real project was supplied) |
 
 ## Generation workflow, supported technologies, repair rules
 

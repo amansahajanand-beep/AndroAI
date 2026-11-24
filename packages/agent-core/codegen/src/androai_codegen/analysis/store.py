@@ -275,6 +275,38 @@ class FactStore:
         draft = self._facts.get(fact_id)
         return draft.attributes.get(key) if draft else None
 
+    def status_of(self, fact_id: str) -> FactStatus | None:
+        draft = self._facts.get(fact_id)
+        return draft.status if draft else None
+
+    def attributes_of(self, fact_id: str) -> dict[str, AttrValue]:
+        draft = self._facts.get(fact_id)
+        return dict(draft.attributes) if draft else {}
+
+    def tags_of(self, fact_id: str) -> frozenset[str]:
+        draft = self._facts.get(fact_id)
+        return frozenset(draft.tags) if draft else frozenset()
+
+    def evidence_of(self, fact_id: str) -> tuple[Evidence, ...]:
+        """The evidence collected for a fact so far, in report order."""
+        draft = self._facts.get(fact_id)
+        if draft is None:
+            return ()
+        return tuple(sorted(draft.evidence.values(), key=lambda e: e.sort_key))
+
+    def relation_items(self, kind: str) -> list[tuple[str, str, FactStatus, tuple[Evidence, ...]]]:
+        """``(source, target, status, evidence)`` of every relationship of ``kind``, sorted."""
+        return [
+            (
+                s,
+                t,
+                draft.status,
+                tuple(sorted(draft.evidence.values(), key=lambda e: e.sort_key)),
+            )
+            for (s, k, t), draft in sorted(self._rels.items())
+            if k == kind
+        ]
+
     def relation_pairs(self, kind: str) -> list[tuple[str, str]]:
         """``(source, target)`` of every relationship of ``kind`` added so far, sorted."""
         return sorted((s, t) for (s, k, t) in self._rels if k == kind)
@@ -377,11 +409,24 @@ class FactStore:
         return dropped
 
 
+def report_fingerprint(report: AnalysisReport) -> str:
+    """The fingerprint a report should carry, recomputed from its content (a consistency check)."""
+    return _fingerprint(
+        list(report.facts),
+        list(report.relationships),
+        list(report.limitations),
+        report.analysis_version,
+    )
+
+
 def _fingerprint(
-    facts: list[Fact], relationships: list[Relationship], limitations: list[Limitation]
+    facts: list[Fact],
+    relationships: list[Relationship],
+    limitations: list[Limitation],
+    version: str = ANALYSIS_VERSION,
 ) -> str:
     payload = {
-        "version": ANALYSIS_VERSION,
+        "version": version,
         "facts": [f.model_dump(mode="json") for f in facts],
         "relationships": [r.model_dump(mode="json") for r in relationships],
         "limitations": [m.model_dump(mode="json") for m in limitations],
