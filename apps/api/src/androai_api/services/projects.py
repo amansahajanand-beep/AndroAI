@@ -278,6 +278,50 @@ def write_file(db: Session, storage: ObjectStorage, project: Project, *, path: s
     return row
 
 
+def move_path(db: Session, project: Project, *, src: str, dst: str, actor_id: str) -> int:
+    """Rename a file or a whole directory (no content is rewritten). Atomic: all or nothing."""
+    src, dst = _clean_path(src), _clean_path(dst)
+    if dst == src or dst.startswith(src + "/"):
+        raise AppError(422, "invalid_path", "Cannot move a path into itself")
+    rows = [r for r in list_files(db, project) if r.path == src or r.path.startswith(src + "/")]
+    if not rows:
+        raise AppError(404, "file_not_found", "File not found")
+    existing = {r.path for r in list_files(db, project)}
+    targets = {r.path: dst + r.path[len(src):] for r in rows}
+    clash = [t for t in targets.values() if t in existing]
+    # a destination that is a file where we need a directory (or vice versa) is also a conflict
+    parts = dst.split("/")
+    if clash or any("/".join(parts[:i]) in existing for i in range(1, len(parts))):
+        raise AppError(409, "exists", f"{dst} already exists")
+    for r in rows:
+        new = targets[r.path]
+        db.add(ProjectFileChange(tenant_id=project.tenant_id, project_id=project.id, path=r.path, source="editor",
+                                 change_type="delete", actor_id=actor_id, before_sha256=r.sha256, before_key=r.storage_key))
+        db.add(ProjectFileChange(tenant_id=project.tenant_id, project_id=project.id, path=new, source="editor",
+                                 change_type="create", actor_id=actor_id, after_sha256=r.sha256, after_key=r.storage_key))
+        r.path = new
+    project.updated_at = _now()
+    log_activity(db, project, actor_id, "file.move", src=src, dst=dst, files=len(rows))
+    db.commit()
+    return len(rows)
+
+
+def delete_path(db: Session, project: Project, *, path: str, actor_id: str) -> int:
+    """Delete a file, or a directory and everything under it."""
+    path = _clean_path(path)
+    rows = [r for r in list_files(db, project) if r.path == path or r.path.startswith(path + "/")]
+    if not rows:
+        raise AppError(404, "file_not_found", "File not found")
+    for r in rows:
+        db.add(ProjectFileChange(tenant_id=project.tenant_id, project_id=project.id, path=r.path, source="editor",
+                                 change_type="delete", actor_id=actor_id, before_sha256=r.sha256, before_key=r.storage_key))
+        db.delete(r)
+    project.updated_at = _now()
+    log_activity(db, project, actor_id, "file.delete", path=path, files=len(rows))
+    db.commit()
+    return len(rows)
+
+
 def delete_file(db: Session, project: Project, *, path: str, actor_id: str, base_sha256: str | None) -> None:
     path = _clean_path(path)
     row = _file_row(db, project, path)
@@ -292,6 +336,29 @@ def delete_file(db: Session, project: Project, *, path: str, actor_id: str, base
     project.updated_at = _now()
     log_activity(db, project, actor_id, "file.delete", path=path)
     db.commit()
+
+
+def search_files(db: Session, storage: ObjectStorage, project: Project, query: str, *,
+                 max_hits: int = 200, max_files: int = 2000) -> list[dict]:
+    """Case-insensitive text search over the project's editable text files (bounded work)."""
+    q = query.lower()
+    if not q:
+        return []
+    limit = get_settings().editor_max_file_bytes
+    hits: list[dict] = []
+    rows = [r for r in list_files(db, project) if not r.is_binary and r.size <= limit][:max_files]
+    for r in rows:
+        try:
+            text = storage.get_bytes(keys.assert_key_in_tenant(r.storage_key, project.tenant_id)).decode("utf-8", errors="replace")
+        except Exception:  # a missing blob must not break the whole search
+            continue
+        for i, line in enumerate(text.split("\n"), 1):
+            col = line.lower().find(q)
+            if col != -1:
+                hits.append({"path": r.path, "line": i, "column": col + 1, "preview": line.strip()[:160]})
+                if len(hits) >= max_hits:
+                    return hits
+    return hits
 
 
 # ---------------------------------------------------------------- snapshots

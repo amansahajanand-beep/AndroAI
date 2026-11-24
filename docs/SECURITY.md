@@ -35,6 +35,10 @@ Implemented and tested:
 
 Known gaps (not done yet): no build sandbox (no build worker exists yet), no CSRF concern today (bearer tokens, no cookies), no MFA, no per-IP limits outside auth routes, no dependency scanning in CI, JWT secret rotation is manual (invalidates sessions), logs are not yet structured/shipped, no malware scanning of uploaded content, blob garbage collection is not implemented.
 
+### Browser sessions (cookies)
+
+The web app uses httpOnly cookies so XSS cannot steal tokens. Defences: `SameSite=Lax`; an `Origin`/`Referer` check on every cookie-authenticated state-changing request (`403 csrf`; trusted origins = `APP_URL` + `ALLOWED_ORIGINS`) and on cookie-based refresh/logout and on login; `Secure` cookies in production; refresh cookie scoped to `/api/v1/auth`; CORS allows only trusted origins (with credentials). Bearer-token clients are exempt from CSRF checks by design. Tested: missing/foreign Origin refused, stolen access cookie dies on logout, cookie refresh rotation. Residual risks: `login` responses still include the tokens in the JSON body (for API clients; the web app discards them); an XSS bug can still *act* as the user while the page is open.
+
 ### Build scheduling and workers (Person 4)
 
 Implemented: pull-model workers authenticated by per-worker tokens (stored hashed, shown once, rotatable); a worker can only read, log to, upload for and complete the one job it currently holds; workers receive **no database or object-storage credentials** (source, artifacts and logs flow through the API); Gradle task names are validated (no `--init-script` style option injection); per-user concurrent/pending job limits and a global queue cap (backpressure); bounded log size; time-limited leases, timeouts, bounded retries; release builds are unsigned and no signing material exists in the platform yet; unavailable runtimes are recorded as `not_run`, a test run with failures or zero executed tests cannot be marked passed.

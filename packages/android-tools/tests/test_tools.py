@@ -16,6 +16,12 @@ def test_detects_kts_project():
     assert d.java_version == 17 and d.has_wrapper and d.has_settings and "ksp" in d.plugins
 
 
+def test_detects_modules():
+    d = detect({"settings.gradle.kts": b'include(":app", ":core:data")\ninclude(":feature:home")', "build.gradle": b""})
+    assert d.modules == [":app", ":core:data", ":feature:home"]
+    assert detect({"settings.gradle": b"include ':app', ':lib'"}).modules == [":app", ":lib"]
+
+
 def test_detects_groovy_and_toml():
     files = {
         "gradle/wrapper/gradle-wrapper.properties": b"distributionUrl=https://services.gradle.org/distributions/gradle-7.5-all.zip",

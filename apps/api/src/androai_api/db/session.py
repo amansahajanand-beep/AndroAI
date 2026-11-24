@@ -28,6 +28,11 @@ def get_db() -> Iterator[Session]:
         yield session
 
 
+def get_session_factory() -> sessionmaker[Session]:
+    """Dependency for streaming endpoints that must open their own short-lived sessions."""
+    return _session_factory()
+
+
 def check_database() -> bool:
     try:
         with get_engine().connect() as conn:

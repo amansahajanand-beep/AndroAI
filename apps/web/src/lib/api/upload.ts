@@ -1,7 +1,9 @@
 import { IS_MOCK } from "@/lib/env";
+import { LIVE_UPLOAD_SCHEME, runUpload } from "./live/uploads";
 
 /**
- * PUTs a file to the pre-signed URL from an UploadSession with progress.
+ * Uploads a file for an UploadSession with progress: live mode goes through the backend bridge,
+ * otherwise it PUTs to the pre-signed URL.
  * fetch() can't report upload progress, so this uses XHR.
  */
 export function uploadToSignedUrl(
@@ -11,6 +13,8 @@ export function uploadToSignedUrl(
   signal?: AbortSignal,
 ): Promise<void> {
   if (IS_MOCK) return mockUpload(file, onProgress, signal);
+  // Live mode: the backend takes a multipart POST to a project (see live/uploads.ts).
+  if (url.startsWith(LIVE_UPLOAD_SCHEME)) return runUpload(url.slice(LIVE_UPLOAD_SCHEME.length), file, onProgress, signal);
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();

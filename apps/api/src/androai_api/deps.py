@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 
 from fastapi import Depends, Request
@@ -29,6 +30,8 @@ class AuthContext:
     session_id: str
     permissions: set[str]
     ip: str | None
+    expires_at: datetime | None = None
+    via_cookie: bool = False
 
     @property
     def tenant_id(self) -> str:
@@ -39,7 +42,29 @@ class AuthContext:
         return self.user.id
 
 
-_UNAUTH = AppError(401, "not_authenticated", "Authentication required")
+ACCESS_COOKIE = "ap_access"
+REFRESH_COOKIE = "ap_refresh"
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def check_origin(request: Request, *, require: bool) -> None:
+    """CSRF defence for cookie sessions: browsers always send Origin on cross-site and on
+    same-site unsafe requests, so a state-changing request whose Origin is missing/foreign is
+    refused. (SameSite=Lax on the cookies is the second layer.) Bearer-token clients are exempt."""
+    origin = request.headers.get("origin")
+    if origin is None:
+        ref = request.headers.get("referer")
+        if ref:
+            from urllib.parse import urlsplit
+
+            p = urlsplit(ref)
+            origin = f"{p.scheme}://{p.netloc}"
+    if origin is None:
+        if require:
+            raise AppError(403, "csrf", "Missing Origin header")
+        return
+    if origin.rstrip("/") not in get_settings().trusted_origins:
+        raise AppError(403, "csrf", "Cross-origin request refused")
 
 
 def current_auth(
@@ -47,9 +72,16 @@ def current_auth(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> AuthContext:
-    if creds is None:
+    via_cookie = False
+    token = creds.credentials if creds is not None else None
+    if token is None:
+        token = request.cookies.get(ACCESS_COOKIE)
+        via_cookie = token is not None
+    if token is None:
         raise AppError(401, "not_authenticated", "Authentication required")
-    claims = decode_access_token(creds.credentials)
+    if via_cookie and request.method not in _SAFE_METHODS:
+        check_origin(request, require=True)
+    claims = decode_access_token(token)
     if claims is None:
         raise AppError(401, "invalid_token", "Invalid or expired access token")
     sess = db.get(UserSession, claims.session_id)
@@ -59,7 +91,8 @@ def current_auth(
     user = db.get(User, claims.user_id)
     if user is None or not user.is_active:
         raise AppError(401, "invalid_token", "Invalid or expired access token")
-    return AuthContext(user, sess.id, rbac.permissions_of(user.roles), client_ip(request))
+    return AuthContext(user, sess.id, rbac.permissions_of(user.roles), client_ip(request),
+                       expires_at=claims.expires_at, via_cookie=via_cookie)
 
 
 def require_permission(name: str):

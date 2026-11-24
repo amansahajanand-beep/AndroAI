@@ -221,13 +221,17 @@ def reset_password(db: Session, *, token: str, new_password: str, ip: str | None
     db.commit()
 
 
-def change_password(db: Session, user: User, *, current: str, new: str) -> None:
+def change_password(db: Session, user: User, *, current: str, new: str, keep_session_id: str | None = None) -> None:
     if not security.verify_password(current, user.password_hash):
         raise AppError(403, "invalid_credentials", "Current password is incorrect")
     problem = security.validate_password_strength(new)
     if problem:
         raise AppError(422, "weak_password", problem)
     user.password_hash = security.hash_password(new)
-    revoke_all_sessions(db, user.id)
+    keep = db.get(UserSession, keep_session_id) if keep_session_id else None
+    stmt = update(UserSession).where(UserSession.user_id == user.id, UserSession.revoked_at.is_(None))
+    if keep is not None:
+        stmt = stmt.where(UserSession.family_id != keep.family_id)  # every other login is signed out
+    db.execute(stmt.values(revoked_at=_now()))
     audit(db, "auth.password_changed", actor_id=user.id, tenant_id=user.tenant_id)
     db.commit()

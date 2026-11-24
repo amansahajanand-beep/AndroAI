@@ -22,9 +22,14 @@ Checks PostgreSQL and Redis. `200` when both reachable, otherwise `503`:
 
 ## Authentication
 
-`Authorization: Bearer <access_token>` on every endpoint except those marked *public*. Access tokens live 30 min (`JWT_ACCESS_TTL_MINUTES`) and are bound to a server-side session, so logout, password change, deactivation and refresh-token reuse revoke them immediately. Refresh tokens are opaque, single-use (rotated on every `/auth/refresh`), 30 days.
+Two ways to authenticate; both end up as the same revocable session:
 
-Client flow: `login` -> store both tokens -> on `401 invalid_token` call `refresh` once -> retry; if refresh fails, sign in again.
+- **Bearer token** (API clients, workers' admin tooling): `Authorization: Bearer <access_token>` from `/auth/login`. Not subject to CSRF checks.
+- **Cookies** (the web app): `/auth/login` also sets httpOnly cookies `ap_access` (path `/`) and `ap_refresh` (path `/api/v1/auth`), `SameSite=Lax`, `Secure` in production. Cookie-authenticated **unsafe** requests (POST/PUT/PATCH/DELETE) must carry an `Origin` (or `Referer`) from `APP_URL`/`ALLOWED_ORIGINS`, else `403 csrf`. `/auth/refresh` and `/auth/logout` accept the refresh cookie when no body is sent. `GET /auth/session` returns `{user, expires_at}`.
+
+Access tokens live 30 min (`JWT_ACCESS_TTL_MINUTES`) and are bound to a server-side session, so logout, password reset, deactivation and refresh-token reuse revoke them immediately. Refresh tokens are opaque, single-use (rotated on every refresh), 30 days. Changing your password signs out your *other* sessions but keeps the current one.
+
+Client flow: `login` -> on `401 invalid_token` call `refresh` once -> retry; if refresh fails, sign in again.
 
 ## v1 endpoints (implemented)
 
@@ -34,9 +39,10 @@ OpenAPI: `/openapi.json`, UI at `/docs`. Pagination: `?limit=&offset=` returning
 | Method | Path | Body -> Response |
 |---|---|---|
 | POST | `/register` | `{email,password,display_name?}` -> `201 User`. Password >= 10 chars. `409 email_taken`, `422 weak_password`. Sends a verification email |
-| POST | `/login` | `{email,password}` -> `{user, tokens:{access_token,access_expires_at,refresh_token,refresh_expires_at}}`. `401 invalid_credentials` (same for unknown email), `403 email_not_verified` when enforced |
-| POST | `/refresh` | `{refresh_token}` -> new `tokens` |
-| POST | `/logout` | `{refresh_token}` -> `204` (revokes the whole login session) |
+| GET | `/session` | *auth required* -> `{user, expires_at}` |
+| POST | `/login` | `{email,password,remember?}` -> `{user, tokens:{access_token,access_expires_at,refresh_token,refresh_expires_at}}`. `401 invalid_credentials` (same for unknown email), `403 email_not_verified` when enforced |
+| POST | `/refresh` | `{refresh_token}` or the refresh cookie -> new `tokens` (and cookies) |
+| POST | `/logout` | `{refresh_token}` or the refresh cookie -> `204` (revokes the whole login session, clears cookies) |
 | POST | `/verify-email` | `{token}` |
 | POST | `/resend-verification` | *auth required* |
 | POST | `/forgot-password` | `{email}` -> `202` always |
@@ -44,24 +50,28 @@ OpenAPI: `/openapi.json`, UI at `/docs`. Pagination: `?limit=&offset=` returning
 | POST | `/change-password` | *auth required* `{current_password,new_password}`; revokes all sessions |
 
 ### Users (`/api/v1/users`)
-`GET /me`, `PATCH /me {display_name}`, `POST /me/logout-all`. `User` = `{id,email,display_name,is_active,email_verified,roles,permissions,created_at}`.
+`GET /me`, `PATCH /me {display_name}`, `POST /me/logout-all`, `GET|PUT /me/preferences` (`theme`, `default_language`, `default_ui_toolkit`, `email_*` flags). `User` = `{id,email,display_name,is_active,email_verified,roles,permissions,created_at}`.
 
 ### Projects (`/api/v1/projects`) â€” permission `projects:manage`; other tenants' ids return `404`
 | Method | Path | Notes |
 |---|---|---|
-| POST / GET | `` | create `{name,description?}`; list `?status=active|archived` |
+| POST / GET | `` | create `{name,description?,metadata?}` (`metadata`: `language, ui_toolkit, package_name, min_sdk, target_sdk, requirements, config`, all validated); list `?status=active|archived` (items include `storage_bytes`, `active_jobs`, `last_build`) |
+| GET | `/activity/recent?limit=` | newest activity across your projects |
 | GET / PATCH / DELETE | `/{id}` | PATCH `{name?,description?,status?}`; DELETE purges stored files, `409 project_busy` if jobs are running |
 | POST | `/{id}/uploads` | multipart `file` (`.zip` source or `.apk`). `Content-Length` required, max 200 MB. ZIP replaces the file set and creates a snapshot; APK is stored as an artifact only. `413`, `415`, `422 invalid_archive|invalid_apk` |
 | GET | `/{id}/uploads` | upload history incl. rejected |
 | GET | `/{id}/files` | current file index |
+| GET | `/{id}/files/search?q=` | text search (max 200 hits) |
+| POST | `/{id}/files/move` | `{from, to}` rename a file or directory atomically (`409 exists`) |
+| GET | `/{id}/analysis` | detected Gradle/AGP/Kotlin/SDK settings, modules, whether it can be built |
 | GET / PUT | `/{id}/files/content?path=` | PUT `{content, base_sha256}`; `409 conflict` if the file changed since `base_sha256` (omit it only when creating) |
-| DELETE | `/{id}/files?path=&base_sha256=` | |
+| DELETE | `/{id}/files?path=&base_sha256=&recursive=` | `recursive=true` deletes a directory tree |
 | GET | `/{id}/files/history?path=` | change history (source: upload/editor/agent/ui_editor) |
 | GET / POST | `/{id}/snapshots` | immutable ZIP of the tree; identical content reuses the latest version |
 | GET | `/{id}/activity`, `/{id}/artifacts` | |
 
 ### Artifacts (`/api/v1/artifacts`)
-`GET /{id}`, `POST /{id}/download-url` -> `{url, expires_in}` (HMAC-signed, 5 min), `GET /{id}/content?exp=&sig=` (*public*; authorised by the signature), `DELETE /{id}`.
+`GET /?build_id=&project_id=` (list), `GET /{id}`, `POST /{id}/download-url` -> `{url, expires_in}` (HMAC-signed, 5 min), `GET /{id}/content?exp=&sig=` (*public*; authorised by the signature), `DELETE /{id}`.
 
 ### Admin (`/api/v1/admin`) â€” role `admin`
 `GET /users?q=`, `GET /users/{id}`, `PATCH /users/{id} {is_active?, roles?}`, `GET /audit-logs?action=&actor_id=`.
@@ -73,17 +83,18 @@ OpenAPI: `/openapi.json`, UI at `/docs`. Pagination: `?limit=&offset=` returning
 | GET | `/builds`, `/builds/{id}` | list (`?project_id=&state=`), detail incl. `toolchain.{detected,required,jdk}` |
 | POST | `/builds/{id}/cancel` | queued/blocked: cancelled at once; running: `cancel_requested` and the worker aborts. `409` if finished |
 | GET | `/builds/{id}/logs?after_seq=` | poll to tail |
+| GET | `/builds/{id}/logs/stream` | SSE: `log` `{seq,line}` then `end` `{status}` |
 | GET | `/builds/{id}/result` | `{state, artifact_id, duration_seconds, errors:[{file,line,message}]}`; download the artifact via `/artifacts/{id}/download-url` |
 | POST | `/tests` | `{project_id, kind: static|compile|unit|instrumented|emulator, build_job_id?, emulator_profile?, ...}`. `instrumented`/`emulator` need a finished `build_job_id` and a KVM-capable worker, otherwise the job is `blocked` |
 | GET / POST | `/tests`, `/tests/{id}`, `/tests/{id}/cancel`, `/tests/{id}/result`, `/tests/{id}/reports` | `result.outcome` is `passed|failed|not_run|error`; `not_run` carries `not_run_reason` |
 
-Job states: `queued, starting, running, completed, failed, cancelled, blocked`. Retries: infrastructure failures and lost workers are retried (`max_attempts` 2, backoff) and every attempt is metered.
+Build items include `number` (per project), `commit_sha`, `artifact_ids`, `errors`, `duration_seconds`; test items embed `result`. Job states: `queued, starting, running, completed, failed, cancelled, blocked`. Retries: infrastructure failures and lost workers are retried (`max_attempts` 2, backoff) and every attempt is metered.
 
 ### Worker protocol (`/api/v1/worker`) — bearer token `wk_...` issued by an admin; for worker implementers
 `POST /register {toolchain:{jdks,platforms}, capabilities:{kvm,emulator}}` -> `POST /heartbeat` every ~30 s (returns `cancel: [job ids]`) -> `POST /claim` (`{job: null}` when idle) -> `GET /jobs/{build|test}/{id}/source` (immutable ZIP; hostile content) -> `POST .../start` -> `POST .../logs {stream, content}` (returns `cancel`) -> `POST .../files` (multipart `role=artifact|report`) -> `POST .../complete {outcome, error_code?, retryable?, errors?, artifact_id?, test_outcome?, passed/failed/skipped?, not_run_reason?}`. Instrumented tests fetch the APK from `GET /jobs/test/{id}/apk`. A claim is a lease (default 120 s) extended by heartbeats and log posts; silence lets the scheduler retry the job elsewhere.
 
 ### Admin additions — permission `admin:workers`
-`POST /admin/workers {name, kind: build|test|emulator, provider, capacity}` (returns the token **once**), `GET /admin/workers`, `PATCH /admin/workers/{id} {capacity?, draining?}`, `POST /admin/workers/{id}/rotate-token`, `DELETE /admin/workers/{id}`, `GET /admin/queues` (depth per queue/state, live vs offline workers).
+`POST /admin/workers {name, kind: build|test|emulator, provider, capacity}` (returns the token **once**), `GET /admin/workers`, `PATCH /admin/workers/{id} {capacity?, draining?}`, `POST /admin/workers/{id}/rotate-token`, `DELETE /admin/workers/{id}`, `GET /admin/queues` (depth per queue/state, live vs offline workers). `GET /admin/overview` (needs `admin:system`): users, active users, projects, builds today, failure rate, queue depth, AI cost today. `GET /admin/users` includes `project_count`; `GET /admin/audit-logs` includes `actor_email`.
 
 ### Not yet implemented
 `/agent/*`, `/usage/*`, `/billing/*` (see BACKEND_PROGRESS.md). They will be added under `/api/v1` without changing the endpoints above.

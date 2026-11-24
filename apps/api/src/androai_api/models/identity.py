@@ -8,7 +8,7 @@ from sqlalchemy import Boolean, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.base import Base
-from ..db.types import CreatedMixin, IdType, TimestampMixin, UTCDateTime, pk
+from ..db.types import CreatedMixin, IdType, JsonType, TimestampMixin, UTCDateTime, pk
 
 
 class User(Base, TimestampMixin):
@@ -24,6 +24,7 @@ class User(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     email_verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    preferences: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)  # UI preferences
 
     roles: Mapped[list["Role"]] = relationship(secondary="user_roles", lazy="selectin")
 

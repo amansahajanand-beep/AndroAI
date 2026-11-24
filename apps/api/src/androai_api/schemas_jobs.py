@@ -50,11 +50,16 @@ class JobOut(_Out):
 
 
 class BuildOut(JobOut):
+    number: int
     variant: str
     output_type: str
     gradle_tasks: list[str]
     toolchain: dict
     agent_run_id: str | None
+    commit_sha: str = ""  # first 7 hex chars of the source snapshot digest
+    artifact_ids: list[str] = []
+    errors: list[dict] = []
+    duration_seconds: float | None = None
 
 
 class BuildResultOut(_Out):
@@ -78,6 +83,7 @@ class TestOut(JobOut):
     emulator_profile: dict | None
     toolchain: dict
     agent_run_id: str | None
+    result: "TestResultOut | None" = None
 
 
 class TestResultOut(_Out):
@@ -158,3 +164,6 @@ class CompleteIn(BaseModel):
 class QueueStatsOut(BaseModel):
     queues: dict[str, dict[str, int]]
     workers: dict[str, dict[str, int]]
+
+
+TestOut.model_rebuild()

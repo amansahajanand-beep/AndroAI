@@ -388,7 +388,7 @@ function ApkReport({ a, projectId }: { a: ApkAnalysis; projectId: string | null 
         <section>
           <h3 className="mb-1.5 text-[14px] font-semibold">Libraries and native code</h3>
           {list(a.detectedLibraries)}
-          <p className="mt-1.5 text-[13px] text-muted-foreground">ABIs: {a.nativeAbis.join(", ") || "none"} · {a.obfuscated ? "Obfuscated" : "Not obfuscated"}</p>
+          <p className="mt-1.5 text-[13px] text-muted-foreground">ABIs: {a.nativeAbis.join(", ") || "none"} · {a.obfuscated === null ? "Obfuscation not analysed" : a.obfuscated ? "Obfuscated" : "Not obfuscated"}</p>
         </section>
       </div>
       {projectId ? (

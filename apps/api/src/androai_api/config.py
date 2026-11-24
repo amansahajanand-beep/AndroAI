@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     app_name: str = "androai-api"
     environment: Literal["development", "test", "production"] = "development"
     app_url: str = "http://localhost:3000"
+    # Extra browser origins allowed to make cookie-authenticated requests (comma separated).
+    allowed_origins: str = ""
+    # Session cookies. `Secure` defaults to on in production; SameSite=Lax + Origin checks stop CSRF.
+    cookie_secure: bool | None = None
+    cookie_domain: str | None = None
 
     # Required infrastructure
     database_url: PostgresDsn
@@ -104,6 +109,15 @@ class Settings(BaseSettings):
             if not (self.s3_bucket and self.s3_access_key_id and self.s3_secret_access_key):
                 raise ValueError("S3_BUCKET / S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY are required in production")
         return self
+
+    @property
+    def cookies_secure(self) -> bool:
+        return self.cookie_secure if self.cookie_secure is not None else self.environment == "production"
+
+    @property
+    def trusted_origins(self) -> set[str]:
+        extra = {o.strip().rstrip("/") for o in self.allowed_origins.split(",") if o.strip()}
+        return {self.app_url.rstrip("/"), *extra}
 
     @property
     def sqlalchemy_url(self) -> str:
