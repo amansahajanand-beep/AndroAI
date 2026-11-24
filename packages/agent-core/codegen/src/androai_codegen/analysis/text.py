@@ -212,8 +212,10 @@ def mask_urls(text: str) -> str:
 def mask_opaque_runs(text: str) -> str:
     """Replace each generated-looking token inside free text (hex, base64, a UUID, digits mixed
     with capitals...) with ``[REDACTED]``; the words and separators around it are kept, so
-    ``user:<32 hex digits>`` becomes ``user:[REDACTED]``. ``/`` joins a run, so standard base64
-    is judged whole (see ``_mask_run``)."""
+    ``user:<32 hex digits>`` becomes ``user:[REDACTED]``. A run may contain ``/`` (or ``%2F``),
+    but it is not judged as one token: each piece between slashes is judged on its own, and pieces
+    that a slash may have cut out of standard base64 are judged together only when there is
+    evidence (see ``_mask_run``), so ``lib/arm64-v8a/libnative.so`` stays readable."""
     return _OPAQUE_RUN.sub(lambda m: _mask_run(m.group()), text)
 
 

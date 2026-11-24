@@ -85,7 +85,7 @@ def test_a_generated_value_with_slashes_is_masked_in_every_position(template: st
     assert_masked(template.format(v=value), value)
 
 
-def test_a_value_with_slashes_is_judged_whole_so_short_pieces_hide_nothing():
+def test_a_value_with_slashes_is_judged_piece_by_piece_and_cut_off_pieces_together():
     assert mask_urls(f"x?s={B64_SHORT}") == "x?s=[REDACTED]"
     # pieces of 13 and 26 (the ``+`` joins ``K7MDENG`` to the rest): both go, nothing is left over
     assert mask_urls(f"x?s={B64_MIXED}") == "x?s=[REDACTED]/[REDACTED]"
