@@ -11,8 +11,9 @@ Every claim the analyser makes is a :class:`Fact` with a ``status``:
     It carries a ``note`` that says what was assumed.
 ``unknown``
     Something that exists but cannot be read statically (a convention plugin, a computed route, an
-    unreadable file). It carries a ``reason``. An ``unknown`` fact is never turned into a "not
-    present" claim by this package.
+    unreadable file), or that there is too little evidence to describe (a ``convention`` with fewer
+    examples than it needs). It carries a ``reason``. An ``unknown`` fact is never turned into a
+    "not present" claim by this package.
 
 The package makes **presence** claims only. A fact that is missing from a report is "not observed",
 not "absent": see :meth:`androai_codegen.analysis.query.ReportIndex.observation`.
@@ -28,7 +29,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-ANALYSIS_VERSION = "m2a-1"
+ANALYSIS_VERSION = "m2b-1"
 EXCERPT_MAX = 80
 SUBJECT_MAX = 400
 ATTR_STRING_MAX = 400
@@ -66,6 +67,8 @@ LimitationCode = Literal[
     "fact_cap_reached",
     "time_budget_exceeded",
     "extractor_error",
+    "flow_cap_reached",
+    "intent_cap_reached",
 ]
 
 _KIND = re.compile(r"^[a-z][a-z0-9_]{0,39}$")

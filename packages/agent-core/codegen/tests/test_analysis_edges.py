@@ -805,7 +805,11 @@ def test_file_facts_say_what_kind_of_file_they_are_and_members_list_their_annota
 
 def test_the_java_xml_fixture_still_has_no_unexplained_unknowns():
     report = analyse(java_xml_project())
-    assert {f.kind for f in report.facts if f.status == "unknown"} == set()
+    # nothing is unreadable; a ``convention`` can still be unknown because there is too little to
+    # describe (M2.8): that is a different reason, and it always says how little
+    unknown = [f for f in report.facts if f.status == "unknown"]
+    assert {f.kind for f in unknown} <= {"convention"}
+    assert all("at least" in (f.reason or "") for f in unknown)
 
 
 # -- survivors of the second mutation round -------------------------------------------------------

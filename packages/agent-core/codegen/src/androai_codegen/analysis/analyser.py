@@ -25,8 +25,10 @@ from .build import extract_build
 from .components import extract_components
 from .config import AnalysisConfig
 from .context import Run
+from .conventions import extract_conventions
 from .data import extract_data
 from .di import extract_di
+from .flows import extract_flows
 from .graph import build_graph
 from .layouts import extract_layouts
 from .model import AnalysisReport, AnalysisStats
@@ -204,6 +206,13 @@ def analyse_files(
     guard("data", lambda: extract_data(run))
     guard("di", lambda: extract_di(run))
     guard("graph", lambda: build_graph(run))
+    guard(
+        "flows",
+        lambda: extract_flows(
+            run, compose if isinstance(compose, ComposeIndex) else ComposeIndex()
+        ),
+    )
+    guard("conventions", lambda: extract_conventions(run))
     not_read = {k: len(v) for k, v in audit.not_read.items()} if audit else {}
     if unsupported:
         not_read["unsupported_source"] = unsupported

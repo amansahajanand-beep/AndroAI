@@ -21,4 +21,9 @@ class AnalysisConfig:
     max_members_per_type: int = 300
     max_evidence_per_fact: int = 8
     max_types_per_file: int = 400
+    # flows (M2.9): screens listed per entry point, edges walked per entry point, and the depth
+    max_flow_screens: int = 200
+    max_flow_visited: int = 5_000
+    max_flow_depth: int = 12
+    max_intents_per_file: int = 300
     deadline_seconds: float | None = None
