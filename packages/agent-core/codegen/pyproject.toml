@@ -39,3 +39,7 @@ ignore = ["SIM905"]
 # The version catalog template: a TOML inline table has to stay on one line.
 "src/androai_codegen/templates/kotlin_compose.py" = ["E501"]
 "tests/sample_project.py" = ["E501"]
+# Android sources, manifests and build scripts embedded as test input: wrapping a line would change
+# the text being analysed.
+"tests/analysis_fixtures.py" = ["E501"]
+"tests/test_analysis_*.py" = ["E501"]
