@@ -16,8 +16,8 @@ from androai_storage import ObjectStorage, keys
 
 from ..config import get_settings
 from ..errors import AppError
-from ..models import (BuildJob, BuildLog, BuildResult as BuildResultRow, BuildUsage, ProjectArtifact, TestJob,
-                      TestResult as TestResultRow, WorkerHeartbeat, WorkerRegistry)
+from ..models import (BuildJob, BuildLog, BuildResult as BuildResultRow, BuildUsage, ProjectActivity, ProjectArtifact,
+                      TestJob, TestResult as TestResultRow, WorkerHeartbeat, WorkerRegistry)
 from .audit import audit
 from .notify import ResultNotifier
 from .scheduler import (ACTIVE, EMULATOR_KINDS, TERMINAL, _can_run, blocked_reason, model_for, worker_is_live,
@@ -189,6 +189,12 @@ def _finish(db: Session, storage: ObjectStorage | None, job, state: str, c: Comp
                              passed=c.passed, failed=c.failed, skipped=c.skipped, duration_seconds=duration))
     if job.started_at:
         _record_usage(db, job)
+    if isinstance(job, BuildJob):
+        db.add(ProjectActivity(tenant_id=job.tenant_id, project_id=job.project_id, action=f"build.{state}",
+                               detail={"job_id": job.id, "number": job.number, "variant": job.variant}))
+    else:
+        db.add(ProjectActivity(tenant_id=job.tenant_id, project_id=job.project_id, action="test.finished",
+                               detail={"job_id": job.id, "kind": job.kind, "outcome": c.test_outcome or state}))
     if job.worker_id and (w := db.get(WorkerRegistry, job.worker_id)) and w.status == "busy":
         w.status = "idle"
     db.flush()

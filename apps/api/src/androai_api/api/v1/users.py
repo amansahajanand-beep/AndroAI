@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from ...db import get_db
 from ...deps import AuthContext, current_auth
 from ...models import User
-from ...schemas import UserOut, UserPatchIn
+from ...schemas import PreferencesIn, UserOut, UserPatchIn
 from ...services import auth as auth_svc
 from ...services import rbac
 
@@ -37,3 +37,15 @@ def logout_all(ctx: AuthContext = Depends(current_auth), db: Session = Depends(g
     auth_svc.revoke_all_sessions(db, ctx.user_id)
     db.commit()
     return Response(status_code=204)
+
+
+@router.get("/me/preferences", response_model=PreferencesIn)
+def get_preferences(ctx: AuthContext = Depends(current_auth)):
+    return PreferencesIn(**{**PreferencesIn().model_dump(), **(ctx.user.preferences or {})})
+
+
+@router.put("/me/preferences", response_model=PreferencesIn)
+def put_preferences(body: PreferencesIn, ctx: AuthContext = Depends(current_auth), db: Session = Depends(get_db)):
+    ctx.user.preferences = body.model_dump()
+    db.commit()
+    return body

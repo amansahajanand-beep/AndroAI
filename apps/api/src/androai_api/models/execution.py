@@ -47,6 +47,7 @@ class BuildJob(Base, _JobColumns):
     snapshot_id: Mapped[str] = mapped_column(
         ForeignKey("project_file_snapshots.id"), nullable=False
     )
+    number: Mapped[int] = mapped_column(Integer, nullable=False)  # per-project sequence (build #14)
     variant: Mapped[str] = mapped_column(String(16), default="debug", nullable=False)
     output_type: Mapped[str] = mapped_column(String(8), default="apk", nullable=False)  # apk|aab
     gradle_tasks: Mapped[list] = mapped_column(JsonType, default=list, nullable=False)
@@ -57,6 +58,7 @@ class BuildJob(Base, _JobColumns):
         Index("ix_build_jobs_state_priority", "state", "priority", "queued_at"),
         Index("ix_build_jobs_tenant_id_state", "tenant_id", "state"),
         Index("ix_build_jobs_project_id", "project_id"),
+        UniqueConstraint("project_id", "number", name="uq_build_jobs_project_id_number"),
     )
 
 

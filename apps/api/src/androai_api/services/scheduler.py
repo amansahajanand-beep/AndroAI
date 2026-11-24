@@ -154,8 +154,11 @@ def submit_build(db: Session, storage: ObjectStorage, project: Project, *, user_
     tasks = _validate_tasks(gradle_tasks if gradle_tasks is not None
                             else [f"bundle{cap}" if output_type == "aab" else f"assemble{cap}"])
     snap, toolchain = _prepare(db, storage, project, user_id, needs_toolchain=True)
+    # Serialise numbering per project (row lock on PostgreSQL; the unique constraint is the backstop).
+    db.execute(select(Project.id).where(Project.id == project.id).with_for_update())
+    number = (db.scalar(select(func.max(BuildJob.number)).where(BuildJob.project_id == project.id)) or 0) + 1
     job = BuildJob(tenant_id=project.tenant_id, user_id=user_id, project_id=project.id, snapshot_id=snap.id,
-                   variant=variant, output_type=output_type, gradle_tasks=tasks, toolchain=toolchain,
+                   number=number, variant=variant, output_type=output_type, gradle_tasks=tasks, toolchain=toolchain,
                    priority=priority, timeout_seconds=timeout_seconds, agent_run_id=agent_run_id,
                    max_attempts=2, queued_at=_now(), state="queued")
     _place(db, job)

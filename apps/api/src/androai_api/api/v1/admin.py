@@ -6,7 +6,7 @@ from ...db import get_db
 from ...deps import AuthContext, require_permission
 from ...errors import AppError
 from ...models import AuditLog, Role, User, UserRole
-from ...schemas import AdminUserOut, AdminUserPatchIn, AuditLogOut, Page
+from ...schemas import AdminUserOut, AdminUserPatchIn, AuditLogOut, OverviewOut, Page
 from ...services import auth as auth_svc
 from ...services import rbac
 from ...services.audit import audit
@@ -28,8 +28,17 @@ def list_users(q: str | None = Query(default=None, max_length=100), limit: int =
     if q:
         stmt = stmt.where(User.email.contains(q.strip().lower(), autoescape=True))
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    rows = db.scalars(stmt.order_by(User.created_at.desc(), User.id).limit(limit).offset(offset))
-    return Page(items=[_admin_out(u) for u in rows], total=total, limit=limit, offset=offset)
+    rows = list(db.scalars(stmt.order_by(User.created_at.desc(), User.id).limit(limit).offset(offset)))
+    from ...models import Project
+
+    counts = dict(db.execute(select(Project.tenant_id, func.count()).where(
+        Project.tenant_id.in_([u.tenant_id for u in rows]), Project.status != "deleted").group_by(Project.tenant_id)).all()) if rows else {}
+    items = []
+    for u in rows:
+        out = _admin_out(u)
+        out.project_count = counts.get(u.tenant_id, 0)
+        items.append(out)
+    return Page(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/users/{user_id}", response_model=AdminUserOut)
@@ -85,4 +94,36 @@ def audit_logs(action: str | None = Query(default=None, max_length=64), actor_id
         stmt = stmt.where(AuditLog.actor_id == actor_id)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(db.scalars(stmt.order_by(AuditLog.created_at.desc(), AuditLog.id).limit(limit).offset(offset)))
-    return Page(items=rows, total=total, limit=limit, offset=offset)
+    emails = dict(db.execute(select(User.id, User.email).where(User.id.in_({r.actor_id for r in rows if r.actor_id}))).all()) if rows else {}
+    items = []
+    for r in rows:
+        out = AuditLogOut.model_validate(r)
+        out.actor_email = emails.get(r.actor_id) if r.actor_id else None
+        items.append(out)
+    return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/overview", response_model=OverviewOut)
+def overview(ctx: AuthContext = Depends(require_permission("admin:system")), db: Session = Depends(get_db)):
+    from datetime import datetime, timedelta, timezone
+
+    from ...models import AiUsage, BuildJob, Project, TestJob
+
+    now = datetime.now(timezone.utc)
+    day, week = now - timedelta(days=1), now - timedelta(days=7)
+    count = lambda stmt: db.scalar(stmt) or 0  # noqa: E731
+    finished_24h = count(select(func.count()).select_from(BuildJob).where(BuildJob.finished_at >= day))
+    failed_24h = count(select(func.count()).select_from(BuildJob).where(BuildJob.finished_at >= day, BuildJob.state == "failed"))
+    cost = count(select(func.coalesce(func.sum(AiUsage.cost_micros), 0)).where(AiUsage.created_at >= day))
+    return OverviewOut(
+        users=count(select(func.count()).select_from(User)),
+        active_users_7d=count(select(func.count()).select_from(User).where(User.last_login_at >= week)),
+        projects=count(select(func.count()).select_from(Project).where(Project.status != "deleted")),
+        builds_today=count(select(func.count()).select_from(BuildJob).where(BuildJob.created_at >= day)),
+        build_failure_rate_24h=(failed_24h / finished_24h) if finished_24h else 0.0,
+        queue_depth={
+            "builds": count(select(func.count()).select_from(BuildJob).where(BuildJob.state.in_(("queued", "blocked")))),
+            "tests": count(select(func.count()).select_from(TestJob).where(TestJob.state.in_(("queued", "blocked")))),
+        },
+        ai_cost_today_usd=round(cost / 1_000_000, 4),
+    )

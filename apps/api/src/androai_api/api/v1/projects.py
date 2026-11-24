@@ -10,10 +10,12 @@ from ...deps import AuthContext, get_owned_project, get_storage, require_permiss
 from ...errors import AppError
 from ...models import (Project, ProjectActivity, ProjectArtifact, ProjectFileChange,
                        ProjectFileSnapshot, ProjectUpload)
-from ...schemas import (ActivityOut, ArtifactOut, FileContentOut, FileOut, FilePutIn, Page,
-                        ProjectCreateIn, ProjectOut, ProjectPatchIn, SnapshotCreateIn, SnapshotOut,
-                        UploadOut, UploadResultOut)
+from ...schemas import (ActivityOut, ActivityRecentOut, AnalysisOut, ArtifactOut, FileContentOut, FileMoveIn, FileOut, FilePutIn,
+                        Page, ProjectCreateIn, ProjectOut, ProjectPatchIn, SearchHitOut, SnapshotCreateIn,
+                        SnapshotOut, UploadOut, UploadResultOut)
 from ...services import projects as svc
+from ...services import scheduler
+from ...services.views import project_out, projects_out
 from ...services.audit import audit
 
 router = APIRouter(tags=["projects"])
@@ -38,14 +40,16 @@ def _limit_body(request: Request) -> None:
 
 @router.post("", response_model=ProjectOut, status_code=201)
 def create_project(body: ProjectCreateIn, ctx: AuthContext = Depends(manage), db: Session = Depends(get_db)):
-    project = Project(tenant_id=ctx.tenant_id, owner_id=ctx.user_id, name=body.name, description=body.description)
+    meta = body.metadata.model_dump(exclude_none=True) if body.metadata else {}
+    project = Project(tenant_id=ctx.tenant_id, owner_id=ctx.user_id, name=body.name, description=body.description,
+                      metadata_=meta)
     db.add(project)
     db.flush()
     svc.log_activity(db, project, ctx.user_id, "project.create")
     audit(db, "project.create", actor_id=ctx.user_id, tenant_id=ctx.tenant_id, resource_type="project",
           resource_id=project.id, ip=ctx.ip)
     db.commit()
-    return project
+    return project_out(db, project)
 
 
 @router.get("", response_model=Page[ProjectOut])
@@ -56,20 +60,32 @@ def list_projects(
 ):
     q = select(Project).where(Project.tenant_id == ctx.tenant_id, Project.status == status)
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
-    items = list(db.scalars(q.order_by(Project.updated_at.desc(), Project.id).limit(limit).offset(offset)))
+    items = projects_out(db, list(db.scalars(q.order_by(Project.updated_at.desc(), Project.id).limit(limit).offset(offset))))
     return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/activity/recent", response_model=list[ActivityRecentOut])
+def recent_activity(limit: int = Query(15, ge=1, le=100), ctx: AuthContext = Depends(manage), db: Session = Depends(get_db)):
+    """Newest activity across all of the caller's projects (dashboard feed)."""
+    rows = db.execute(select(ProjectActivity, Project.name).join(Project, Project.id == ProjectActivity.project_id)
+                      .where(ProjectActivity.tenant_id == ctx.tenant_id, Project.status != "deleted")
+                      .order_by(ProjectActivity.created_at.desc()).limit(limit)).all()
+    return [ActivityRecentOut(id=a.id, project_id=a.project_id, project_name=name, action=a.action, detail=a.detail,
+                              created_at=a.created_at) for a, name in rows]
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
 def get_project(project_id: str, ctx: AuthContext = Depends(manage), db: Session = Depends(get_db)):
-    return get_owned_project(db, ctx, project_id)
+    return project_out(db, get_owned_project(db, ctx, project_id))
 
 
 @router.patch("/{project_id}", response_model=ProjectOut)
 def update_project(project_id: str, body: ProjectPatchIn, ctx: AuthContext = Depends(manage),
                    db: Session = Depends(get_db)):
     p = get_owned_project(db, ctx, project_id)
-    for field in body.model_fields_set:
+    if body.metadata is not None:
+        p.metadata_ = {**(p.metadata_ or {}), **body.metadata.model_dump(exclude_none=True)}
+    for field in body.model_fields_set - {"metadata"}:
         value = getattr(body, field)
         if field == "name":
             value = (value or "").strip()
@@ -80,7 +96,7 @@ def update_project(project_id: str, body: ProjectPatchIn, ctx: AuthContext = Dep
         setattr(p, field, value)
     svc.log_activity(db, p, ctx.user_id, "project.update", fields=sorted(body.model_fields_set))
     db.commit()
-    return p
+    return project_out(db, p)
 
 
 @router.delete("/{project_id}", status_code=204)
@@ -150,9 +166,21 @@ def write_file(project_id: str, body: FilePutIn, path: str = Query(min_length=1,
 @router.delete("/{project_id}/files", status_code=204)
 def delete_file(project_id: str, path: str = Query(min_length=1, max_length=1024),
                 base_sha256: str | None = Query(default=None, pattern="^[0-9a-f]{64}$"),
+                recursive: bool = Query(default=False, description="also delete everything under `path`"),
                 ctx: AuthContext = Depends(manage), db: Session = Depends(get_db)) -> Response:
-    svc.delete_file(db, get_owned_project(db, ctx, project_id), path=path, actor_id=ctx.user_id,
-                    base_sha256=base_sha256)
+    p = get_owned_project(db, ctx, project_id)
+    if recursive:
+        svc.delete_path(db, p, path=path, actor_id=ctx.user_id)
+    else:
+        svc.delete_file(db, p, path=path, actor_id=ctx.user_id, base_sha256=base_sha256)
+    return Response(status_code=204)
+
+
+@router.post("/{project_id}/files/move", status_code=204)
+def move_file(project_id: str, body: FileMoveIn, ctx: AuthContext = Depends(manage),
+              db: Session = Depends(get_db)) -> Response:
+    """Rename/move a file or directory (JSON `{"from": "a/b", "to": "c/b"}`)."""
+    svc.move_path(db, get_owned_project(db, ctx, project_id), src=body.src, dst=body.dst, actor_id=ctx.user_id)
     return Response(status_code=204)
 
 
@@ -169,6 +197,29 @@ def file_history(project_id: str, path: str | None = Query(default=None, max_len
     return [{"id": r.id, "path": r.path, "change_type": r.change_type, "source": r.source,
              "actor_id": r.actor_id, "before_sha256": r.before_sha256, "after_sha256": r.after_sha256,
              "agent_run_id": r.agent_run_id, "created_at": r.created_at} for r in rows]
+
+
+@router.get("/{project_id}/files/search", response_model=list[SearchHitOut])
+def search_files(project_id: str, q: str = Query(min_length=1, max_length=200), ctx: AuthContext = Depends(manage),
+                 db: Session = Depends(get_db), storage: ObjectStorage = Depends(get_storage)):
+    return svc.search_files(db, storage, get_owned_project(db, ctx, project_id), q)
+
+
+@router.get("/{project_id}/analysis", response_model=AnalysisOut)
+def analysis(project_id: str, ctx: AuthContext = Depends(manage), db: Session = Depends(get_db),
+             storage: ObjectStorage = Depends(get_storage)):
+    """Detected Gradle/AGP/Kotlin/SDK settings and whether the project can be built."""
+    p = get_owned_project(db, ctx, project_id)
+    files = svc.list_files(db, p)
+    if not files:
+        raise AppError(409, "empty_project", "The project has no files to analyse")
+    info = scheduler.analyze_snapshot(db, storage, p)
+    paths = {f.path for f in files}
+    kts = any(x.endswith(".kts") for x in ("settings.gradle.kts", "build.gradle.kts") if x in paths)
+    groovy = any(x in paths for x in ("settings.gradle", "build.gradle"))
+    return AnalysisOut(detected=info["detected"], required=info["required"], file_count=len(files),
+                       modules=info["detected"].get("modules", []),
+                       build_system="gradle-kts" if kts else "gradle-groovy" if groovy else "unknown")
 
 
 # ---- snapshots, activity, artifacts

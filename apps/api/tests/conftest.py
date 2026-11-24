@@ -15,7 +15,7 @@ from sqlalchemy.pool import StaticPool  # noqa: E402
 from androai_api import rate_limit  # noqa: E402
 from androai_api.db import models as _models  # noqa: E402,F401
 from androai_api.db.base import Base  # noqa: E402
-from androai_api.db import get_db  # noqa: E402
+from androai_api.db import get_db, get_session_factory  # noqa: E402
 from androai_api.deps import get_storage  # noqa: E402
 from androai_api.mail import Mail, get_mailer  # noqa: E402
 from androai_api.main import app  # noqa: E402
@@ -92,6 +92,7 @@ def client(db_factory, storage, outbox, notifier, monkeypatch):
     monkeypatch.setattr(rate_limit, "get_redis", _no_redis)
     rate_limit.reset_local_state()
     app.dependency_overrides[get_db] = _db
+    app.dependency_overrides[get_session_factory] = lambda: db_factory
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_mailer] = lambda: outbox
     app.dependency_overrides[get_notifier] = lambda: notifier

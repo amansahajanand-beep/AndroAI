@@ -119,13 +119,19 @@ def test_password_reset_flow(client, outbox):
     assert client.post(f"{A}/login", json={"email": "alice@example.com", "password": "brand-new-password!"}).status_code == 200
 
 
-def test_change_password_revokes_sessions(client):
+def test_change_password_keeps_this_session_and_revokes_others(client):
     tokens, h = register_and_login(client)
+    other = client.post(f"{A}/login", json={"email": "alice@example.com", "password": PASSWORD}).json()["tokens"]
+    other_h = {"Authorization": f"Bearer {other['access_token']}"}
     r = client.post(f"{A}/change-password", headers=h, json={"current_password": "nope-nope-nope", "new_password": "new-password-123"})
     assert r.status_code == 403
     r = client.post(f"{A}/change-password", headers=h, json={"current_password": PASSWORD, "new_password": "new-password-123"})
     assert r.status_code == 200
-    assert client.get("/api/v1/users/me", headers=h).status_code == 401
+    assert client.get("/api/v1/users/me", headers=h).status_code == 200  # this browser stays signed in
+    assert client.get("/api/v1/users/me", headers=other_h).status_code == 401  # every other login is out
+    assert client.post(f"{A}/refresh", json={"refresh_token": other["refresh_token"]}).status_code == 401
+    assert client.post(f"{A}/login", json={"email": "alice@example.com", "password": PASSWORD}).status_code == 401
+    assert client.post(f"{A}/login", json={"email": "alice@example.com", "password": "new-password-123"}).status_code == 200
 
 
 def test_login_rate_limited_per_account(client):

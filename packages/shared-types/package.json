@@ -1,0 +1,10 @@
+{
+  "name": "@apppilot/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Frontend <-> backend API contract: endpoint table and TypeScript types. Reconstructed from the frontend's usage; keep in sync with docs/API.md.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" }
+}

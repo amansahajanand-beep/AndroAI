@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { NextConfig } from "next";
 
 const apiMode = process.env.NEXT_PUBLIC_API_MODE ?? "live";
@@ -14,8 +15,16 @@ if (
 
 const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8000";
 
+// The monorepo root: @apppilot/contracts lives in ../../packages/shared-types, outside this app.
+const repoRoot = path.resolve(__dirname, "../..");
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  turbopack: { root: repoRoot },
+  outputFileTracingRoot: repoRoot,
+  // The dev rewrite proxy buffers request bodies and silently truncates at 10 MB by default, which would
+  // corrupt project uploads (limit: UPLOAD_MAX_BYTES, 200 MB). Production routes /api straight to the API (Nginx).
+  experimental: { middlewareClientMaxBodySize: "210mb" },
   transpilePackages: ["@apppilot/contracts"],
   // Dev only: let the LocalTunnel hostname (e.g. my-app.loca.lt) load HMR and font/dev resources.
   allowedDevOrigins: ["*.loca.lt"],

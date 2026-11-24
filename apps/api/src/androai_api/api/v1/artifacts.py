@@ -44,6 +44,18 @@ def _owned(db: Session, ctx: AuthContext, artifact_id: str) -> ProjectArtifact:
     return art
 
 
+@router.get("", response_model=list[ArtifactOut])
+def list_artifacts(build_id: str | None = Query(default=None, max_length=64),
+                   project_id: str | None = Query(default=None, max_length=64),
+                   ctx: AuthContext = Depends(manage), db: Session = Depends(get_db)):
+    q = select(ProjectArtifact).where(ProjectArtifact.tenant_id == ctx.tenant_id)
+    if build_id:
+        q = q.where(ProjectArtifact.build_job_id == build_id)
+    if project_id:
+        q = q.where(ProjectArtifact.project_id == project_id)
+    return list(db.scalars(q.order_by(ProjectArtifact.created_at.desc()).limit(200)))
+
+
 @router.get("/{artifact_id}", response_model=ArtifactOut)
 def get_artifact(artifact_id: str, ctx: AuthContext = Depends(manage), db: Session = Depends(get_db)):
     return _owned(db, ctx, artifact_id)

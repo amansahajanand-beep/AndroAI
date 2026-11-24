@@ -36,6 +36,7 @@ class Detected:
     java_version: int | None = None  # source/target/toolchain level requested by the project
     has_wrapper: bool = False
     has_settings: bool = False
+    modules: list[str] = field(default_factory=list)
     plugins: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -57,6 +58,7 @@ _P = {
     "min_sdk": re.compile(r"\bminSdk(?:Version)?\s*(?:=|\s)\s*(\d{1,2})\b"),
     "java_a": re.compile(r"JavaVersion\.VERSION_(\d+)(?:_(\d+))?"),
     "java_b": re.compile(r"jvmToolchain\s*\(\s*(\d+)\s*\)"),
+    "include": re.compile(r"""\binclude\s*\(?\s*((?:['"]:?[A-Za-z0-9_:\-.]+['"]\s*,?\s*)+)"""),
     "java_c": re.compile(r"""languageVersion\s*(?:=|\.set\()\s*JavaLanguageVersion\.of\(\s*(\d+)\s*\)"""),
 }
 _PLUGIN_MARKERS = {
@@ -122,6 +124,10 @@ def detect(files: Mapping[str, bytes]) -> Detected:
     if levels:
         d.java_version = max(levels)
 
+    for name in ("settings.gradle", "settings.gradle.kts"):
+        for m in _P["include"].finditer(texts.get(name, "")):
+            d.modules += [":" + x.lstrip(":") for x in re.findall(r"""['"]([^'"]+)['"]""", m.group(1))]
+    d.modules = sorted(set(d.modules))
     blob = "\n".join(allt)
     d.plugins = sorted(name for name, marker in _PLUGIN_MARKERS.items() if marker in blob)
     return d

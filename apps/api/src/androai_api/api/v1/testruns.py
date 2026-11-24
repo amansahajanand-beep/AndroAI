@@ -11,6 +11,7 @@ from ...models import TestJob, TestReport, TestResult
 from ...schemas import Page
 from ...schemas_jobs import TestCreateIn, TestOut, TestResultOut
 from ...services import dispatch, scheduler
+from ...services.views import tests_out
 from ...services.notify import ResultNotifier, get_notifier
 from .builds import owned_job
 
@@ -24,9 +25,10 @@ def create_test(body: TestCreateIn, ctx: AuthContext = Depends(run), db: Session
     """Queue a test job. Emulator/instrumented jobs become `blocked` (with the reason) when no
     KVM-capable worker is registered; they are never reported as passed without running."""
     project = get_owned_project(db, ctx, body.project_id)
-    return scheduler.submit_test(db, storage, project, user_id=ctx.user_id, kind=body.kind,
-                                 priority=body.priority, timeout_seconds=body.timeout_seconds,
-                                 build_job_id=body.build_job_id, emulator_profile=body.emulator_profile)
+    job = scheduler.submit_test(db, storage, project, user_id=ctx.user_id, kind=body.kind,
+                                priority=body.priority, timeout_seconds=body.timeout_seconds,
+                                build_job_id=body.build_job_id, emulator_profile=body.emulator_profile)
+    return tests_out(db, [job])[0]
 
 
 @router.get("", response_model=Page[TestOut])
@@ -39,13 +41,13 @@ def list_tests(project_id: str | None = None, state: str | None = Query(default=
     if state:
         q = q.where(TestJob.state == state)
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
-    items = list(db.scalars(q.order_by(TestJob.created_at.desc(), TestJob.id).limit(limit).offset(offset)))
+    items = tests_out(db, list(db.scalars(q.order_by(TestJob.created_at.desc(), TestJob.id).limit(limit).offset(offset))))
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{job_id}", response_model=TestOut)
 def get_test(job_id: str, ctx: AuthContext = Depends(run), db: Session = Depends(get_db)):
-    return owned_job(db, ctx, TestJob, job_id)
+    return tests_out(db, [owned_job(db, ctx, TestJob, job_id)])[0]
 
 
 @router.post("/{job_id}/cancel", response_model=TestOut)
@@ -53,7 +55,7 @@ def cancel_test(job_id: str, ctx: AuthContext = Depends(run), db: Session = Depe
                 storage: ObjectStorage = Depends(get_storage), notifier: ResultNotifier = Depends(get_notifier)):
     job = owned_job(db, ctx, TestJob, job_id)
     dispatch.cancel(db, storage, notifier, job, actor_id=ctx.user_id)
-    return job
+    return tests_out(db, [job])[0]
 
 
 @router.get("/{job_id}/result", response_model=TestResultOut)

@@ -37,6 +37,10 @@ All tests run against **SQLite and a local-filesystem / moto-mocked S3**. The fo
 
 Scheduler concurrency has been tested single-threaded on SQLite. Claim safety on PostgreSQL relies on `FOR UPDATE SKIP LOCKED` and has **not** been exercised with concurrent workers.
 
+## Phase 3: web integration (this branch)
+
+See [FRONTEND_INTEGRATION.md](FRONTEND_INTEGRATION.md). Backend additions made for the web app: cookie sessions + CSRF checks, `/auth/session`, project metadata and enriched project/build/test responses, per-project build numbers (migration `0003`), file move / recursive delete / search, project analysis, activity feed, preferences, artifact listing, SSE build log stream, admin overview/audit extras. `@apppilot/contracts` was missing from the repo and has been reconstructed in `packages/shared-types`: **Person 1 must review it**.
+
 ## Not started (in planned order)
 
 1. **Android build worker**: the process that claims jobs, unpacks the source, runs Gradle in a sandbox, extracts errors, uploads artifacts; SDK/JDK images; sandbox network policy. `workers/android-build` is still the skeleton.
