@@ -16,7 +16,18 @@ from .paths import normalize_relative_path
 PathKind = Literal["missing", "file", "dir", "other"]
 
 _SKIPPED_DIRS = frozenset(
-    {".git", ".gradle", ".idea", "build", "node_modules", ".cxx", ".externalNativeBuild"}
+    {
+        ".git",
+        ".gradle",
+        ".idea",
+        "build",
+        "node_modules",
+        ".cxx",
+        ".externalNativeBuild",
+        ".claude",
+        ".cursor",
+        ".windsurf",
+    }
 )
 
 

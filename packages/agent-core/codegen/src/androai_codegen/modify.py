@@ -74,7 +74,7 @@ class ModificationTask(_Model):
 class ModifyConfig(_Model):
     max_revisions: int = Field(default=1, ge=0, le=3)  # extra proposals after blocking problems
     max_files: int = Field(default=40, ge=1, le=500)
-    max_file_chars: int = Field(default=60_000, ge=1000)  # per file shown to the proposer
+    max_file_chars: int = Field(default=24_000, ge=1000)  # per file shown to the proposer
     checkpoint_label: str = "before AI modification"
 
 
@@ -190,7 +190,7 @@ def run_modification(
         except Exception as exc:  # the provider is outside our control; the source is untouched
             return ModifyResult(
                 outcome=ModifyOutcome.PROVIDER_FAILURE,
-                warnings=(*warnings, f"the edit proposer failed: {type(exc).__name__}"),
+                warnings=(*warnings, _provider_warning(exc)),
                 attempts=attempts,
             )
         if not proposal.edits:
@@ -261,6 +261,15 @@ def run_modification(
         review=last_review,
         attempts=attempts,
     )
+
+
+def _provider_warning(exc: Exception) -> str:
+    """What to tell the user. Only a provider that vouches for its message (``safe_message``, never
+    containing keys or response bodies) is quoted; anything else is reported by type only."""
+    safe = getattr(exc, "safe_message", None)
+    if isinstance(safe, str) and safe:
+        return f"the edit proposer failed: {safe[:300]}"
+    return f"the edit proposer failed: {type(exc).__name__}"
 
 
 def _apply(

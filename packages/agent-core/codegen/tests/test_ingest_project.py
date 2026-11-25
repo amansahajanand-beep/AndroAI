@@ -472,3 +472,19 @@ def test_generated_projects_import_with_every_file_intact(tmp_path, data):
     got = workspace_files(result.workspace.root)
     assert set(got) == set(files)
     assert all(got[rel] == files[rel].encode() for rel in files)
+
+
+def test_ai_tool_folders_are_not_imported(tmp_path):
+    from ingest_helpers import import_dir, minimal_project, write_tree
+
+    files = minimal_project()
+    files[".claude/worktrees/abc/app/src/main/AndroidManifest.xml"] = "<manifest/>"
+    files[".claude/skills/x/SKILL.md"] = "notes"
+    files[".cursor/rules"] = "rules"
+    data = tmp_path / "data"
+    data.mkdir()
+    result = import_dir(write_tree(tmp_path / "src", files), data)
+    paths = {p.relative_to(result.workspace.root).as_posix() for p in result.workspace.root.rglob("*") if p.is_file()}
+    assert not any(p.startswith((".claude", ".cursor")) for p in paths)
+    assert "app/src/main/AndroidManifest.xml" in paths
+    assert result.report.counts.skipped_entries >= 2  # each excluded folder counts once

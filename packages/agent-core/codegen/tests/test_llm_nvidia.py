@@ -118,3 +118,31 @@ def test_key_comes_from_the_environment_and_never_shows_in_repr(monkeypatch):
     monkeypatch.setenv("NVIDIA_MODEL", "some/model")
     c = NvidiaClient(transport=Fake())
     assert c.model == "some/model" and KEY not in repr(c) and KEY not in str(vars(c).get("model"))
+
+
+def cut(content="{"):
+    body = {"choices": [{"message": {"content": content}, "finish_reason": "length"}], "usage": {}}
+    return 200, json.dumps(body).encode()
+
+
+def test_cut_off_reply_is_retried_asking_for_less_without_resending_the_fragment():
+    c, fake = client(
+        cut('{"edits": [{"action": "modify", "path": "a" ' + "x" * 500), reply(json.dumps(GOOD))
+    )
+    assert ask(c).notes == "n" and len(fake.calls) == 2
+    second = fake.calls[1][2]["messages"]
+    assert [m["role"] for m in second] == ["system", "user", "user"]
+    assert "cut off" in second[-1]["content"] and "x" * 100 not in json.dumps(second)
+
+
+def test_cut_off_twice_gives_a_clear_safe_error():
+    c, _ = client(cut(), cut())
+    with pytest.raises(LlmError) as err:
+        ask(c)
+    assert "cut off twice" in err.value.safe_message and KEY not in err.value.safe_message
+
+
+def test_reasoning_block_is_ignored_even_if_it_contains_braces():
+    text = '<think>maybe {"edits": 1} hmm</think>\n' + json.dumps(GOOD)
+    c, _ = client(reply(text))
+    assert ask(c).notes == "n"

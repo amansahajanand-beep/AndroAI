@@ -221,3 +221,15 @@ def test_cut_file_cannot_be_overwritten_with_full_content(run, project):
     )
     assert result.outcome is ModifyOutcome.REJECTED
     assert (project / STRINGS).read_text() == long
+
+
+def test_provider_failure_quotes_only_a_message_the_provider_vouches_for(run):
+    class Vouched(Exception):
+        safe_message = "the model's reply was cut off twice at the output limit"
+
+    safe = run(Scripted(Vouched("secret sk-123 in here")))
+    assert safe.outcome is ModifyOutcome.PROVIDER_FAILURE
+    assert any("cut off twice" in w for w in safe.warnings)
+    assert not any("sk-123" in w for w in safe.warnings)
+    plain = run(Scripted(RuntimeError("key sk-456 rejected")))
+    assert not any("sk-456" in w for w in plain.warnings)

@@ -31,7 +31,12 @@ Transport = Callable[[str, dict[str, str], bytes, float], tuple[int, bytes]]
 
 
 class LlmError(Exception):
-    """A model call failed. The message never contains the key or the response body."""
+    """A model call failed. The message never contains the key or the response body, so it is safe
+    to show to a user (``safe_message``)."""
+
+    @property
+    def safe_message(self) -> str:
+        return str(self)[:300]
 
 
 def _urllib_transport(
@@ -85,8 +90,29 @@ class NvidiaClient:
         schema_hint = json.dumps(output.model_json_schema())[:6000]
         messages[0]["content"] += f"\n\nThe JSON must satisfy this JSON Schema:\n{schema_hint}"
         last_problem = ""
-        for _attempt in (1, 2):  # one repair attempt if the reply is not valid
-            text = self._chat(messages, max_output_tokens)
+        cut_off = False
+        for _attempt in (1, 2):  # one corrective attempt
+            text, truncated = self._chat(messages, max_output_tokens)
+            if truncated:
+                if cut_off:
+                    raise LlmError(
+                        "the model's reply was cut off twice at the output limit; "
+                        "ask for a smaller, more specific change"
+                    )
+                cut_off = True
+                last_problem = "cut off"
+                # Do not send the cut-off text back: it is huge and unusable.
+                messages = [
+                    *messages[:2],
+                    {
+                        "role": "user",
+                        "content": "Your reply was cut off at the output limit. Reply again, much "
+                        'shorter: use only small exact text replacements ("edits") for the lines '
+                        "that must change, never whole files, and touch as few files as possible. "
+                        "JSON object only.",
+                    },
+                ]
+                continue
             try:
                 return output.model_validate(_extract_json(text))
             except (ValueError, ValidationError) as exc:
@@ -104,7 +130,8 @@ class NvidiaClient:
 
     # -- one chat call, with retries on rate limits and server errors ---------------------
 
-    def _chat(self, messages: list[dict[str, str]], max_tokens: int) -> str:
+    def _chat(self, messages: list[dict[str, str]], max_tokens: int) -> tuple[str, bool]:
+        """The reply text and whether the model stopped because it hit the output limit."""
         body = json.dumps(
             {
                 "model": self.model,
@@ -141,10 +168,12 @@ class NvidiaClient:
             raise LlmError(f"the API rejected the key or model access (HTTP {status})")
         raise LlmError(f"the API call failed (HTTP {status})")
 
-    def _read(self, raw: bytes) -> str:
+    def _read(self, raw: bytes) -> tuple[str, bool]:
         try:
             data = json.loads(raw)
-            text = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            text = choice["message"]["content"]
+            truncated = choice.get("finish_reason") == "length"
             usage = data.get("usage") or {}
         except (ValueError, KeyError, IndexError, TypeError):
             raise LlmError("the API reply had an unexpected shape") from None
@@ -153,7 +182,15 @@ class NvidiaClient:
         self.usage["calls"] += 1
         self.usage["input_tokens"] += int(usage.get("prompt_tokens") or 0)
         self.usage["output_tokens"] += int(usage.get("completion_tokens") or 0)
-        return text
+        return _strip_reasoning(text), truncated
+
+
+_THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_reasoning(text: str) -> str:
+    """Drop a reasoning model's <think> block so braces inside it cannot be mistaken for JSON."""
+    return _THINK.sub("", text).strip()
 
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)

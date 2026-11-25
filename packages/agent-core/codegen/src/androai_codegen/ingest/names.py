@@ -21,8 +21,20 @@ from .models import IngestLimits
 # Never imported. ``.git`` is matched case-insensitively. A ``build`` directory is only excluded
 # where it is a Gradle output directory (see ``excluded_reason``), because ``build`` can also be a
 # source package. The workspace skips the same names when it lists a project.
+# AI coding tools keep skills, caches and whole extra checkouts (``.claude/worktrees``) beside the
+# code; they are not part of the app and would only crowd out and confuse the real files.
 EXCLUDED_DIR_NAMES = frozenset(
-    {".gradle", ".idea", "node_modules", ".cxx", ".externalNativeBuild", "__MACOSX"}
+    {
+        ".gradle",
+        ".idea",
+        "node_modules",
+        ".cxx",
+        ".externalNativeBuild",
+        "__MACOSX",
+        ".claude",
+        ".cursor",
+        ".windsurf",
+    }
 )
 EXCLUDED_FILE_NAMES = frozenset({".DS_Store", "Thumbs.db"})
 

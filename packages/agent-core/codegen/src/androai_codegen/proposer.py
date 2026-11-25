@@ -41,7 +41,11 @@ Delete only files listed in the plan's deleted_files.
 - Prefer small exact replacements ("edits": a list of {old, new}). Each "old" must appear in the \
 file exactly once, character for character (copy it from the file, including indentation). \
 Use "replace_all": true only when you mean every occurrence.
-- Use full "content" only for a new file, or for a short file shown in full.
+- Use full "content" only for a new file, or for a short existing file (under about 40 lines). \
+Never resend a long existing file: your reply has a strict length limit and a cut-off reply \
+is lost.
+- Keep the change small and focused: edit as few files and lines as the request needs. If the \
+request is broad or vague, make the smallest sensible improvement and explain it in "notes".
 - Match the project's existing style, naming, architecture and libraries. Do not add a library \
 unless the plan allows it. Do not touch anything listed under "preserve".
 - Never write secrets, tokens or the text [REDACTED]; leave masked values alone.
