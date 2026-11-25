@@ -46,7 +46,7 @@ import {
 } from "@/components/ui/overlays";
 import { Avatar, Badge, Card, Input, Table, TBody, TD, TH, THead, TR } from "@/components/ui/primitives";
 import { useAgentTasks, useProjects, useSession } from "@/lib/api/hooks";
-import { cn, formatRelative } from "@/lib/utils";
+import { formatRelative } from "@/lib/utils";
 import { useProjectFolders, type ProjectFolder } from "@/stores/project-folders";
 import { pinnedFirst, useProjectPins } from "@/stores/project-pins";
 import { useUiStore } from "@/stores/ui-store";
@@ -143,40 +143,18 @@ function matchesFilters(p: Project, active: Set<string>) {
 const TOOL_BTN =
   "inline-flex h-9 items-center gap-2 rounded-lg border border-border-strong px-3 text-[13.5px] font-medium text-foreground/90 outline-none transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-surface-2";
 
-/** First-run empty state: three floating device mockups and one clear next step. */
+/** First-run empty state: one calm message and one clear next step. */
 function FirstProjectEmpty() {
-  const phones = [
-    { hue: 275, rot: "-rotate-12", pos: "left-[6%] top-10", delay: "0s" },
-    { hue: 330, rot: "rotate-0", pos: "left-1/2 -translate-x-1/2 top-0", delay: "1.2s" },
-    { hue: 200, rot: "rotate-12", pos: "right-[6%] top-10", delay: "2.4s" },
-  ];
   return (
-    <div className="relative isolate overflow-hidden rounded-2xl border border-border bg-card px-6 py-14 text-center sm:py-20">
-      <div aria-hidden className="relative mx-auto h-56 w-full max-w-md">
-        {phones.map((p, i) => (
-          <div key={i} className={cn("absolute w-24 animate-float", p.pos)} style={{ animationDelay: p.delay }}>
-            <div className={cn("h-40 rounded-2xl border border-white/20 bg-background/80 p-2 shadow-[0_24px_50px_-18px_rgb(0_0_0/0.55)] backdrop-blur", p.rot)}>
-              <div
-                className="grid h-10 place-items-center rounded-xl text-white"
-                style={{ backgroundImage: `linear-gradient(135deg, oklch(0.62 0.2 ${p.hue}), oklch(0.5 0.22 ${p.hue + 70}))` }}
-              >
-                {i === 1 ? <Sparkles className="size-4" /> : null}
-              </div>
-              <div className="mt-2 grid gap-1.5">
-                <i className="h-2 w-full rounded-full bg-foreground/15" />
-                <i className="h-2 w-2/3 rounded-full bg-foreground/10" />
-                <i className="h-9 w-full rounded-lg bg-foreground/[0.07]" />
-                <i className="h-9 w-full rounded-lg bg-foreground/[0.07]" />
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-      <h2 className="mt-4 text-balance text-2xl font-semibold tracking-[-0.03em] sm:text-3xl">Your first app is one sentence away</h2>
-      <p className="mx-auto mt-3 max-w-md text-pretty text-[15px] leading-relaxed text-muted-foreground">
+    <div className="flex flex-col items-center rounded-xl border border-dashed border-border-strong px-6 py-16 text-center sm:py-24">
+      <span className="grid size-12 place-items-center rounded-xl border border-border bg-surface-2 text-muted-foreground" aria-hidden>
+        <Sparkles className="size-5" />
+      </span>
+      <h2 className="mt-5 text-balance text-[22px] font-semibold tracking-[-0.02em]">Your first app is one sentence away</h2>
+      <p className="mx-auto mt-2 max-w-md text-pretty text-[15px] leading-relaxed text-muted-foreground">
         Describe an app, upload an Android Studio project, or inspect an APK. Everything you create shows up here.
       </p>
-      <Button asChild size="lg" className="mt-8">
+      <Button asChild size="lg" className="mt-7">
         <Link href="/projects/new">
           <Plus /> New project
         </Link>

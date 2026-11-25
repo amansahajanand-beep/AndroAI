@@ -185,7 +185,7 @@ function PromptForm({ initialDescription }: { initialDescription: string }) {
       </details>
 
       <div className="flex justify-end">
-        <Button type="submit" size="lg" variant="ai" loading={create.isPending}>
+        <Button type="submit" size="lg" loading={create.isPending}>
           Generate project
         </Button>
       </div>
@@ -411,9 +411,8 @@ function UploadPanel({ kind }: { kind: UploadKind }) {
         <Alert tone="warning">
           <Info />
           <span>
-            <strong className="font-medium">APK analysis is not source access.</strong> We inspect the compiled app —
-            manifest, permissions, components, libraries — and can show decompiled code. It won&apos;t recover the
-            original project, and changes the agent makes produce new code rather than editing the original.
+            <strong className="font-medium">APK analysis is not source access.</strong> We inspect the compiled app and can
+            show decompiled code; agent changes produce new code, not edits to the original.
           </span>
         </Alert>
       ) : null}
@@ -458,15 +457,15 @@ export function NewProjectWizard() {
         }
       />
       {!current ? (
-        <div className="grid gap-3" role="list">
+        <ul className="grid gap-3">
           {METHODS.map((m) => (
+            <li key={m.id}>
             <button
-              key={m.id}
-              role="listitem"
+              type="button"
               onClick={() => setMethod(m.id)}
-              className="group flex items-start gap-4 rounded-xl border border-border bg-card p-5 text-left shadow-card transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-pop"
+              className="group flex w-full items-start gap-4 rounded-lg border border-border bg-card p-5 text-left outline-none transition-colors duration-150 hover:border-border-strong hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <span className={cn("grid size-11 shrink-0 place-items-center rounded-xl ring-1 transition-transform duration-300 group-hover:scale-110", m.id === "prompt" ? "bg-ai-soft text-ai ring-ai/25" : "bg-primary-soft text-primary ring-primary/25")}>
+              <span className={cn("grid size-10 shrink-0 place-items-center rounded-lg", m.id === "prompt" ? "bg-ai-soft text-ai" : "bg-surface-3 text-foreground")}>
                 <m.icon className="size-5" aria-hidden />
               </span>
               <span>
@@ -477,8 +476,9 @@ export function NewProjectWizard() {
                 <span className="mt-1 block text-[14px] text-muted-foreground">{m.body}</span>
               </span>
             </button>
+            </li>
           ))}
-        </div>
+        </ul>
       ) : (
         <Card>
           <CardContent className="p-5">

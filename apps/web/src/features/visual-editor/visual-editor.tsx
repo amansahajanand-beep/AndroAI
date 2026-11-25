@@ -36,7 +36,7 @@ function Tree({ node, selected, onSelect, depth = 0 }: { node: UiNode; selected:
     <li>
       <button
         onClick={() => onSelect(node.id)}
-        className={cn("flex h-7 w-full items-center gap-1 rounded-sm pr-2 text-left font-mono text-[13px] hover:bg-surface-2", selected === node.id && "bg-primary-soft text-primary")}
+        className={cn("flex h-8 w-full items-center gap-1 rounded-md pr-2 text-left font-mono text-[13px] transition-colors hover:bg-surface-2", selected === node.id && "bg-surface-3 text-foreground")}
         style={{ paddingLeft: 6 + depth * 12 }}
       >
         {node.children.length ? <ChevronRight className="size-3 rotate-90 text-subtle-foreground" aria-hidden /> : <span className="w-3" />}
@@ -217,8 +217,7 @@ export function VisualEditorScreen({ projectId }: { projectId: string }) {
           <Card>
             <PendingBackend endpoint="ui.screens">
               The visual editor needs the code-generation service to parse screens into a component tree and render
-              previews. The contract is drafted in <code>packages/contracts/src/visual-editor.ts</code> and waiting on
-              its owner.
+              previews. It becomes available as soon as that service is connected.
             </PendingBackend>
           </Card>
         ) : (

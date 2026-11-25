@@ -39,7 +39,7 @@ export function DialogContent({
           "fixed z-50 border border-border bg-popover text-popover-foreground shadow-pop focus:outline-none",
           side === "right"
             ? "inset-y-0 right-0 flex h-full w-full max-w-2xl flex-col border-y-0 border-r-0 data-[state=open]:animate-in data-[state=open]:slide-in-from-right"
-            : "left-1/2 top-1/2 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl p-6 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+            : "left-1/2 top-1/2 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl p-6 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
           className,
         )}
         {...props}
@@ -79,6 +79,7 @@ export function ConfirmDialog({
   confirmLabel,
   destructive,
   loading,
+  confirmDisabled,
   onConfirm,
   children,
 }: {
@@ -89,6 +90,8 @@ export function ConfirmDialog({
   confirmLabel: string;
   destructive?: boolean;
   loading?: boolean;
+  /** Keeps the confirm button disabled, e.g. until a type-to-confirm field matches. */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   children?: React.ReactNode;
 }) {
@@ -104,7 +107,7 @@ export function ConfirmDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant={destructive ? "destructive" : "default"} loading={loading} onClick={onConfirm}>
+          <Button variant={destructive ? "destructive" : "default"} loading={loading} disabled={confirmDisabled} onClick={onConfirm}>
             {confirmLabel}
           </Button>
         </DialogFooter>

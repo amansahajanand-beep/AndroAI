@@ -122,8 +122,6 @@ export function BillingScreen() {
     }
   };
 
-  const currentPlan = plans.data?.find((p) => p.id === sub.data?.planId);
-
   return (
     <PageBody>
       <PageHeader
@@ -172,11 +170,10 @@ export function BillingScreen() {
       <section className="mt-8">
         <SectionTitle>
           Plans{" "}
-          {sub.data ? (
-            <span className="ml-1 font-normal text-muted-foreground">
-              · You&apos;re on {currentPlan?.name ?? sub.data.planId}
-              {sub.data.cancelAtPeriodEnd ? " (cancels at period end)" : ""}
-              {sub.data.status === "past_due" ? " — payment past due" : ""}
+          {/* The current plan is marked on its card; only status notes go here. */}
+          {sub.data && (sub.data.cancelAtPeriodEnd || sub.data.status === "past_due") ? (
+            <span className={cn("ml-1 font-normal", sub.data.status === "past_due" ? "text-destructive" : "text-muted-foreground")}>
+              · {sub.data.status === "past_due" ? "Payment past due" : "Cancels at period end"}
             </span>
           ) : null}
         </SectionTitle>
@@ -191,7 +188,7 @@ export function BillingScreen() {
                       <h3 className="text-base font-semibold">{p.name}</h3>
                       {current ? <Badge tone="primary">Current plan</Badge> : null}
                     </div>
-                    <p className="mt-2 text-[32px] font-semibold tabular-nums">
+                    <p className="mt-2 text-[28px] font-semibold tabular-nums tracking-tight">
                       {formatUsd(p.priceMonthlyUsd)}
                       <span className="text-[14px] font-normal text-muted-foreground"> / month</span>
                     </p>

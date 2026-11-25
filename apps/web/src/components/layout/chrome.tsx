@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSyncExternalStore } from "react";
 import { useTheme } from "next-themes";
-import { ChevronDown, FlaskConical, Globe, LogOut, Moon, Settings, Sun, UserRound, CreditCard } from "lucide-react";
+import { ChevronDown, FlaskConical, Globe, LogOut, Moon, Settings, ShieldHalf, Sun, UserRound, CreditCard } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Avatar, Badge } from "@/components/ui/primitives";
@@ -12,11 +12,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Tooltip,
 } from "@/components/ui/overlays";
+import { isUnauthorized } from "@/lib/api/errors";
 import { IS_MOCK } from "@/lib/env";
 import { useLogout, useSession } from "@/lib/api/hooks";
 import { cn } from "@/lib/utils";
@@ -75,9 +75,14 @@ export function UserMenu({ compact, variant = "default" }: { compact?: boolean; 
             )}
             aria-label="Account menu"
           >
-            <span aria-hidden className="grid size-6 shrink-0 place-items-center rounded-md bg-brand text-[12px] font-semibold text-white">
-              {user.name.trim().charAt(0).toUpperCase() || "?"}
-            </span>
+            {user.avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element -- the user's own avatar, any host
+              <img src={user.avatarUrl} alt="" className="size-6 shrink-0 rounded-md object-cover" />
+            ) : (
+              <span aria-hidden className="grid size-6 shrink-0 place-items-center rounded-md bg-brand text-[12px] font-semibold text-white">
+                {user.name.trim().charAt(0).toUpperCase() || "?"}
+              </span>
+            )}
             {!compact ? (
               <>
                 <span className="min-w-0 flex-1 truncate text-[14px] font-semibold">{`${user.name.split(" ")[0]}'s AppPilot`}</span>
@@ -100,16 +105,25 @@ export function UserMenu({ compact, variant = "default" }: { compact?: boolean; 
           </button>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align={sidebar ? "start" : "end"} className="w-56">
-        <DropdownMenuLabel>{user.email}</DropdownMenuLabel>
-        {/* Settings is in the sidebar; the IDE has no sidebar, so its menu links there. */}
-        {sidebar ? null : (
-          <DropdownMenuItem asChild>
-            <Link href="/settings">
-              <UserRound /> Settings
-            </Link>
-          </DropdownMenuItem>
-        )}
+      <DropdownMenuContent align={sidebar ? "start" : "end"} className="w-60">
+        <div className="flex items-center gap-2.5 px-2 pb-2 pt-1.5">
+          <Avatar name={user.name} src={user.avatarUrl} className="size-9" />
+          <div className="min-w-0">
+            <p className="truncate text-[14px] font-semibold leading-tight">{user.name}</p>
+            <p className="truncate text-[12.5px] text-muted-foreground">{user.email}</p>
+          </div>
+        </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/settings?tab=account">
+            <UserRound /> Profile
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/settings?tab=preferences">
+            <Settings /> Account settings
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <Link href="/billing">
             <CreditCard /> Billing and usage
@@ -118,7 +132,7 @@ export function UserMenu({ compact, variant = "default" }: { compact?: boolean; 
         {user.role === "admin" ? (
           <DropdownMenuItem asChild>
             <Link href="/admin">
-              <Settings /> Admin
+              <ShieldHalf /> Admin
             </Link>
           </DropdownMenuItem>
         ) : null}
@@ -136,15 +150,25 @@ export function UserMenu({ compact, variant = "default" }: { compact?: boolean; 
             <Globe /> AppPilot website
           </Link>
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuItem
-          onSelect={() =>
+          disabled={logout.isPending}
+          onSelect={(e) => {
+            // Keep the menu open until the request finishes so a double click can't send it twice.
+            e.preventDefault();
             logout.mutate(undefined, {
+              // The server ends the session (the cookie) and the app has already dropped everything it
+              // cached for this user (useLogout), so the login page is the only place left to go.
               onSuccess: () => router.replace("/login"),
-              onError: () => toast.error("Couldn't sign out. Try again."),
-            })
-          }
+              onError: (err) => {
+                // A 401 means the session was already over (expired, or signed out in another tab).
+                if (isUnauthorized(err)) router.replace("/login");
+                else toast.error("Couldn't log out. Try again.");
+              },
+            });
+          }}
         >
-          <LogOut /> Sign out
+          <LogOut /> {logout.isPending ? "Logging out…" : "Log out"}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

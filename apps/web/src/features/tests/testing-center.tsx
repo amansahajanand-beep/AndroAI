@@ -3,14 +3,14 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 import type { TestCase, TestJob, TestJobKind, ValidationStatus } from "@apppilot/contracts";
-import { Bot, Play, Smartphone, TestTube2 } from "lucide-react";
+import { Bot, HelpCircle, Play, Smartphone, TestTube2 } from "lucide-react";
 import { toast } from "sonner";
 import { PageBody } from "@/components/layout/page";
 import { LogViewer } from "@/components/logs/log-viewer";
 import { EmptyState, LoadingRows, QueryView } from "@/components/states/states";
 import { VALIDATION_STATUS, ValidationBadge } from "@/components/status/status-badge";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Tabs, TabsContent, TabsList, TabsTrigger, Tooltip } from "@/components/ui/overlays";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tabs, TabsContent, TabsList, TabsTrigger, Tooltip } from "@/components/ui/overlays";
 import { Badge, Card } from "@/components/ui/primitives";
 import { errorMessage, isPendingBackend } from "@/lib/api/errors";
 import { useScreenshots, useStartTests, useTestCases, useTestJobs, useTestLogs } from "@/lib/api/hooks";
@@ -151,9 +151,27 @@ export function TestingCenterScreen({ projectId }: { projectId: string }) {
 
   return (
     <PageBody>
-      {/* The project tabs already name this page; only its action sits here. */}
-      <div className="mb-4 flex justify-end">
-          <DropdownMenu>
+      {/* The project tabs already name this page; the status guide and the action sit here. */}
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="subtle" size="sm">
+              <HelpCircle /> Status guide
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-80">
+            <p className="mb-2 text-[13px] font-semibold">Results use five statuses</p>
+            <ul className="grid gap-2 text-[13px] text-muted-foreground">
+              {(Object.keys(VALIDATION_STATUS) as ValidationStatus[]).map((st) => (
+                <li key={st} className="flex items-start gap-2">
+                  <ValidationBadge status={st} className="shrink-0" />
+                  <span>{VALIDATION_STATUS[st].description}</span>
+                </li>
+              ))}
+            </ul>
+          </PopoverContent>
+        </Popover>
+        <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button loading={start.isPending}>
                 <Play /> Run tests
@@ -166,20 +184,27 @@ export function TestingCenterScreen({ projectId }: { projectId: string }) {
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
-          </DropdownMenu>
-      </div>
-      <div className="mb-4 flex flex-wrap gap-x-4 gap-y-1.5 text-[13px] text-muted-foreground">
-        {(Object.keys(VALIDATION_STATUS) as ValidationStatus[]).map((s) => (
-          <span key={s} className="flex items-center gap-1.5">
-            <ValidationBadge status={s} /> {VALIDATION_STATUS[s].description}
-          </span>
-        ))}
+        </DropdownMenu>
       </div>
       <QueryView
         query={jobs}
         loading={<LoadingRows rows={5} />}
         isEmpty={(d) => d.length === 0}
-        empty={<Card><EmptyState icon={<TestTube2 />} title="No test runs yet">Run unit tests to check the project&apos;s logic, or an emulator run to check screens.</EmptyState></Card>}
+        empty={
+          <Card>
+            <EmptyState
+              icon={<TestTube2 />}
+              title="No test runs yet"
+              action={
+                <Button size="sm" loading={start.isPending} onClick={() => run("unit")}>
+                  <Play /> Run unit tests
+                </Button>
+              }
+            >
+              Run unit tests to check the project&apos;s logic, or an emulator run to check screens.
+            </EmptyState>
+          </Card>
+        }
       >
         {(list) => (
           <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">

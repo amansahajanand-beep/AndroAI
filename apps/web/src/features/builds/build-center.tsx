@@ -156,7 +156,7 @@ function BuildDetail({ buildId, projectId }: { buildId: string; projectId: strin
           )}
         </TabsContent>
         <TabsContent value="log" className="flex min-h-0 flex-1 flex-col">
-          {log.query.isError ? <ErrorState error={log.query.error} compact /> : <LogViewer lines={log.lines} live={log.live} className="flex-1" />}
+          {log.query.isError ? <ErrorState error={log.query.error} compact /> : <LogViewer lines={log.lines} live={log.live} emptyText={log.query.isPending ? "Loading output…" : undefined} className="flex-1" />}
         </TabsContent>
         <TabsContent value="artifacts" className="min-h-0 flex-1 overflow-auto p-5">
           <Artifacts buildId={b.id} />

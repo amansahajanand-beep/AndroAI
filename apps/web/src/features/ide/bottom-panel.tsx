@@ -95,7 +95,7 @@ function BuildOutput({ projectId, readOnly }: { projectId: string; readOnly?: bo
           </Button>
         ) : null}
       </div>
-      {latest ? <LogViewer lines={log.lines} live={log.live} className="min-h-0 flex-1" /> : <EmptyState compact title="Run a build to see Gradle output" />}
+      {latest ? <LogViewer lines={log.lines} live={log.live} emptyText={log.query.isPending ? "Loading output…" : undefined} className="min-h-0 flex-1" /> : <EmptyState compact title="Run a build to see Gradle output" />}
     </div>
   );
 }

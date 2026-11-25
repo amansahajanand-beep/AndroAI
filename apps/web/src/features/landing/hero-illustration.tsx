@@ -66,18 +66,18 @@ export function HeroIllustration({ className }: { className?: string }) {
     <div
       aria-hidden
       className={cn(
-        "relative rounded-2xl bg-linear-to-b from-brand-2/60 via-border-strong to-border/20 p-px",
+        "relative rounded-xl bg-border-strong p-px",
         "shadow-[0_40px_90px_-50px_rgb(15_20_40/0.4)] dark:shadow-[0_40px_100px_-40px_rgb(0_0_0/0.85)]",
         className,
       )}
     >
-      <div className="absolute -right-3 -top-4 z-10 hidden items-center gap-1.5 rounded-full border border-success/30 bg-card px-3 py-1.5 text-[12px] font-medium text-success shadow-pop animate-float sm:flex">
+      <div className="absolute -right-3 -top-4 z-10 hidden items-center gap-1.5 rounded-full border border-success/30 bg-card px-3 py-1.5 text-[12px] font-medium text-success shadow-pop sm:flex">
         <CheckCircle2 className="size-3.5" /> Build succeeded
       </div>
-      <div className="absolute -left-3 bottom-16 z-10 hidden items-center gap-1.5 rounded-full border border-ai/30 bg-card px-3 py-1.5 text-[12px] font-medium text-ai shadow-pop animate-float [animation-delay:2s] md:flex">
+      <div className="absolute -left-3 bottom-16 z-10 hidden items-center gap-1.5 rounded-full border border-ai/30 bg-card px-3 py-1.5 text-[12px] font-medium text-ai shadow-pop md:flex">
         <Sparkles className="size-3.5" /> 2 files written by agent
       </div>
-      <div className="overflow-hidden rounded-[19px] bg-surface">
+      <div className="overflow-hidden rounded-[11px] bg-surface">
         <div className="flex h-11 items-center gap-3 border-b border-border bg-surface-2/60 px-4 text-[12px] text-muted-foreground">
           <span className="flex gap-1.5">
             <i className="size-2.5 rounded-full bg-destructive/70" />

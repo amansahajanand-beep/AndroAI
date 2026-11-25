@@ -9,7 +9,7 @@ export function LogoMark({ className }: { className?: string }) {
     <span
       aria-hidden
       className={cn(
-        "relative grid size-7 shrink-0 place-items-center rounded-[9px] bg-brand shadow-[0_6px_16px_-6px_var(--brand-glow)]",
+        "relative grid size-7 shrink-0 place-items-center rounded-[9px] bg-brand",
         className,
       )}
     >
@@ -23,7 +23,7 @@ export function LogoMark({ className }: { className?: string }) {
 
 export function Logo({ className, collapsed }: { className?: string; collapsed?: boolean }) {
   return (
-    <span className={cn("inline-flex items-center gap-2.5 font-display font-semibold tracking-tight", className)}>
+    <span className={cn("inline-flex items-center gap-2.5 font-brand font-semibold tracking-tight", className)}>
       <LogoMark />
       {collapsed ? (
         <span className="sr-only">AppPilot AI</span>

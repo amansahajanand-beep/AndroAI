@@ -25,7 +25,7 @@ import type {
 } from "@apppilot/contracts";
 import { TERMINAL_AGENT_STATUSES } from "@apppilot/contracts";
 import { api } from "./client";
-import { isPendingBackend } from "./errors";
+import { isPendingBackend, isUnauthorized } from "./errors";
 
 export const qk = {
   session: ["session"] as const,
@@ -92,7 +92,13 @@ export function useLogout() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.auth.logout,
-    onSettled: () => qc.clear(),
+    // Drop everything cached for this user once the session is really over: after a successful
+    // logout, or when the server says there was no session left (401). A failed request (network
+    // down) keeps the user signed in, so their data stays.
+    onSuccess: () => qc.clear(),
+    onError: (e) => {
+      if (isUnauthorized(e)) qc.clear();
+    },
   });
 }
 

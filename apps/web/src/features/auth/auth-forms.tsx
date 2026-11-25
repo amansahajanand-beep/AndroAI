@@ -37,23 +37,21 @@ function FormError({ error }: { error: unknown }) {
   );
 }
 
-/** Only allow same-site relative redirects after sign-in. */
 /** Where a successful sign-in always lands. */
 const AFTER_LOGIN = "/dashboard";
 
 /* Presentational helpers for the Sign in / Register screens (no auth logic). */
 
-const AUTH_INPUT =
-  "h-11 rounded-lg border-border-strong bg-surface pl-10 text-[15px] transition-[border-color,box-shadow] duration-200 hover:border-primary/50 focus-visible:border-primary focus-visible:shadow-[0_0_0_4px_var(--primary-soft)]";
-const AUTH_BUTTON =
-  "h-11 w-full rounded-lg text-[15px] transition-all duration-200 hover:shadow-[0_10px_28px_-12px_var(--primary)] active:translate-y-px";
+/* One field and button style for all four auth screens (Sign in, Register, Forgot, Reset). */
+const AUTH_INPUT = "h-11 rounded-lg bg-surface pl-10 text-[15px]";
+const AUTH_BUTTON = "h-11 w-full rounded-lg text-[15px]";
 const AUTH_LINK = "font-medium text-primary underline-offset-4 transition-colors hover:underline";
 
 function IconInput({ icon: Icon, className, ...props }: React.ComponentProps<typeof Input> & { icon: LucideIcon }) {
   return (
     <div className="group relative">
       <Icon
-        className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground transition-colors group-focus-within:text-primary"
+        className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground transition-colors group-focus-within:text-foreground"
         aria-hidden
       />
       <Input className={cn(AUTH_INPUT, className)} {...props} />
@@ -66,7 +64,7 @@ function PasswordInput({ className, ...props }: Omit<React.ComponentProps<typeof
   return (
     <div className="group relative">
       <Lock
-        className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground transition-colors group-focus-within:text-primary"
+        className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground transition-colors group-focus-within:text-foreground"
         aria-hidden
       />
       <Input type={show ? "text" : "password"} className={cn(AUTH_INPUT, "pr-11", className)} {...props} />
@@ -219,13 +217,15 @@ export function ForgotPasswordForm() {
   if (forgot.isSuccess) {
     return (
       <div className="grid gap-4">
-        <MailCheck className="size-6 text-success" aria-hidden />
-        <h1 className="text-2xl font-semibold tracking-tight">Check your email</h1>
-        <p className="text-[14px] text-muted-foreground">
+        <span className="grid size-11 place-items-center rounded-xl border border-border bg-surface-2 text-success" aria-hidden>
+          <MailCheck className="size-5" />
+        </span>
+        <h1 className="text-balance text-[1.75rem] font-semibold leading-tight tracking-[-0.02em]">Check your email</h1>
+        <p className="text-[14.5px] leading-relaxed text-muted-foreground">
           If an account exists for <span className="text-foreground">{email}</span>, we&apos;ve sent a link to reset
           your password. The link expires in 30 minutes.
         </p>
-        <Button asChild variant="outline">
+        <Button asChild variant="outline" size="lg" className={AUTH_BUTTON}>
           <Link href="/login">Back to sign in</Link>
         </Button>
       </div>
@@ -235,7 +235,7 @@ export function ForgotPasswordForm() {
   return (
     <form
       noValidate
-      className="grid gap-4"
+      className="grid gap-5"
       onSubmit={(e) => {
         e.preventDefault();
         if (!EMAIL_RE.test(email)) return setError("Enter a valid email address.");
@@ -243,20 +243,15 @@ export function ForgotPasswordForm() {
         forgot.mutate({ email });
       }}
     >
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Reset your password</h1>
-        <p className="mt-1 text-[14px] text-muted-foreground">
-          Enter the email you signed up with and we&apos;ll send you a reset link.
-        </p>
-      </div>
+      <AuthHeading title="Reset your password">Enter the email you signed up with and we&apos;ll send you a reset link.</AuthHeading>
       <FormError error={forgot.error} />
       <Field label="Email" htmlFor="email" error={error}>
-        <Input id="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} aria-invalid={!!error} autoFocus />
+        <IconInput icon={Mail} id="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} aria-invalid={!!error} autoFocus />
       </Field>
-      <Button type="submit" size="lg" loading={forgot.isPending}>
+      <Button type="submit" size="lg" loading={forgot.isPending} className={AUTH_BUTTON}>
         Send reset link
       </Button>
-      <Link href="/login" className="text-center text-[14px] text-primary hover:underline">
+      <Link href="/login" className={cn(AUTH_LINK, "text-center text-[14px]")}>
         Back to sign in
       </Link>
     </form>
@@ -274,9 +269,8 @@ export function ResetPasswordForm() {
   if (!token) {
     return (
       <div className="grid gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">This link is incomplete</h1>
-        <p className="text-[14px] text-muted-foreground">Open the link from your reset email again, or request a new one.</p>
-        <Button asChild variant="outline"><Link href="/forgot-password">Request a new link</Link></Button>
+        <AuthHeading title="This link is incomplete">Open the link from your reset email again, or request a new one.</AuthHeading>
+        <Button asChild variant="outline" size="lg" className={AUTH_BUTTON}><Link href="/forgot-password">Request a new link</Link></Button>
       </div>
     );
   }
@@ -284,9 +278,8 @@ export function ResetPasswordForm() {
   if (reset.isSuccess) {
     return (
       <div className="grid gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Password updated</h1>
-        <p className="text-[14px] text-muted-foreground">Sign in with your new password.</p>
-        <Button asChild><Link href="/login">Sign in</Link></Button>
+        <AuthHeading title="Password updated">Sign in with your new password.</AuthHeading>
+        <Button asChild size="lg" className={AUTH_BUTTON}><Link href="/login">Sign in</Link></Button>
       </div>
     );
   }
@@ -294,7 +287,7 @@ export function ResetPasswordForm() {
   return (
     <form
       noValidate
-      className="grid gap-4"
+      className="grid gap-5"
       onSubmit={(e) => {
         e.preventDefault();
         const next: Errors = {
@@ -306,17 +299,15 @@ export function ResetPasswordForm() {
         reset.mutate({ token, password });
       }}
     >
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Choose a new password</h1>
-      </div>
+      <AuthHeading title="Choose a new password">Use at least {MIN_PASSWORD} characters. You&apos;ll sign in with it next.</AuthHeading>
       <FormError error={reset.error} />
       <Field label="New password" htmlFor="password" error={errors.password} hint={`At least ${MIN_PASSWORD} characters.`}>
-        <Input id="password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={!!errors.password} autoFocus />
+        <PasswordInput id="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={!!errors.password} autoFocus />
       </Field>
       <Field label="Confirm new password" htmlFor="confirm" error={errors.confirm}>
-        <Input id="confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-invalid={!!errors.confirm} />
+        <PasswordInput id="confirm" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-invalid={!!errors.confirm} />
       </Field>
-      <Button type="submit" size="lg" loading={reset.isPending}>
+      <Button type="submit" size="lg" loading={reset.isPending} className={AUTH_BUTTON}>
         Update password
       </Button>
     </form>

@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { pinnedFirst, useProjectPins } from "@/stores/project-pins";
 import { useUiStore } from "@/stores/ui-store";
 import { MockModeBadge, UserMenu } from "./chrome";
+import { UpgradeCard } from "@/features/billing/upgrade-card";
 import { CommandSearch } from "./command-search";
 
 interface NavItem {
@@ -132,19 +133,26 @@ function ProjectList({ onNavigate }: { onNavigate?: () => void }) {
 /** Workspace switcher, navigation and the project list; shared by the desktop sidebar and the phone drawer. */
 function SidebarBody({ collapsed, onNavigate, onSearch }: { collapsed: boolean; onNavigate?: () => void; onSearch: () => void }) {
   const pathname = usePathname();
+  const navLink = (href: string) => {
+    const item = NAV.find((n) => n.href === href);
+    return item ? (
+      <SideLink
+        key={item.href}
+        item={item}
+        active={item.match ? item.match(pathname) : pathname === item.href}
+        collapsed={collapsed}
+        onNavigate={onNavigate}
+      />
+    ) : null;
+  };
   return (
     <>
       <div className={cn("pb-3", collapsed && "flex justify-center")}>
         <UserMenu variant="sidebar" compact={collapsed} />
       </div>
+      {/* Order: Home, Search, Projects, New project, Settings. */}
       <nav aria-label="Main" className="grid gap-0.5">
-        <SideLink
-          item={{ href: "/projects/new", label: "New project", icon: SquarePen }}
-          active={pathname === "/projects/new"}
-          collapsed={collapsed}
-          onNavigate={onNavigate}
-          className={pathname === "/projects/new" ? undefined : "bg-surface-2"}
-        />
+        {navLink("/dashboard")}
         <WithTooltip collapsed={collapsed} label="Search">
           <button
             type="button"
@@ -165,15 +173,15 @@ function SidebarBody({ collapsed, onNavigate, onSearch }: { collapsed: boolean; 
             )}
           </button>
         </WithTooltip>
-        {NAV.map((item) => (
-          <SideLink
-            key={item.href}
-            item={item}
-            active={item.match ? item.match(pathname) : pathname === item.href}
-            collapsed={collapsed}
-            onNavigate={onNavigate}
-          />
-        ))}
+        {navLink("/projects")}
+        <SideLink
+          item={{ href: "/projects/new", label: "New project", icon: SquarePen }}
+          active={pathname === "/projects/new"}
+          collapsed={collapsed}
+          onNavigate={onNavigate}
+          className={pathname === "/projects/new" ? undefined : "bg-surface-2"}
+        />
+        {navLink("/settings")}
       </nav>
       {collapsed ? null : <ProjectList onNavigate={onNavigate} />}
     </>
@@ -240,7 +248,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ) : null}
           <SidebarBody collapsed={collapsed} onSearch={openSearch} />
         </div>
-        {collapsed ? null : <MockModeBadge className="m-3 self-start" />}
+        <div className={cn("shrink-0 pb-3 pt-1", collapsed ? "flex justify-center px-2.5" : "px-2")}>
+          <UpgradeCard collapsed={collapsed} />
+        </div>
+        {collapsed ? null : <MockModeBadge className="mx-3 mb-3 self-start" />}
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col md:py-2 md:pr-2">
@@ -262,6 +273,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <DialogPrimitive.Description className="sr-only">Main navigation</DialogPrimitive.Description>
                 <div className="flex-1 overflow-y-auto pb-3">
                   <SidebarBody collapsed={false} onNavigate={() => setMobileOpen(false)} onSearch={openSearch} />
+                </div>
+                <div className="shrink-0 pb-3 pt-1">
+                  <UpgradeCard />
                 </div>
               </DialogPrimitive.Content>
             </DialogPrimitive.Portal>

@@ -317,12 +317,12 @@ export function Switch({ className, ...props }: React.ComponentProps<typeof Swit
   return (
     <SwitchPrimitive.Root
       className={cn(
-        "peer inline-flex h-[18px] w-8 shrink-0 cursor-pointer items-center rounded-full border border-transparent bg-surface-3 transition-colors data-[state=checked]:bg-brand disabled:cursor-not-allowed disabled:opacity-50",
+        "peer inline-flex h-[18px] w-8 shrink-0 cursor-pointer items-center rounded-full border border-transparent bg-surface-3 transition-colors data-[state=checked]:bg-foreground disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       {...props}
     >
-      <SwitchPrimitive.Thumb className="pointer-events-none block size-3.5 translate-x-0.5 rounded-full bg-foreground shadow transition-transform data-[state=checked]:translate-x-[15px] data-[state=checked]:bg-white" />
+      <SwitchPrimitive.Thumb className="pointer-events-none block size-3.5 translate-x-0.5 rounded-full bg-foreground shadow transition-transform data-[state=checked]:translate-x-[15px] data-[state=checked]:bg-background" />
     </SwitchPrimitive.Root>
   );
 }
@@ -331,7 +331,7 @@ export function Checkbox({ className, ...props }: React.ComponentProps<typeof Ch
   return (
     <CheckboxPrimitive.Root
       className={cn(
-        "peer size-4 shrink-0 rounded-[5px] border border-border-strong bg-surface data-[state=checked]:border-transparent data-[state=checked]:bg-brand data-[state=checked]:text-white disabled:opacity-50",
+        "peer size-4 shrink-0 rounded-[5px] border border-border-strong bg-surface data-[state=checked]:border-transparent data-[state=checked]:bg-foreground data-[state=checked]:text-background disabled:opacity-50",
         className,
       )}
       {...props}

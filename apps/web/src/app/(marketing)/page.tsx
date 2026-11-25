@@ -91,7 +91,7 @@ function PilotGlyph({ className }: { className?: string }) {
 
 const CONTAINER = "mx-auto w-full max-w-6xl px-5 sm:px-6";
 const CARD =
-  "group relative rounded-2xl border border-border bg-card shadow-card transition-all duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-pop";
+  "group relative rounded-xl border border-border bg-card transition-colors duration-200 hover:border-border-strong hover:bg-surface-2";
 
 export default function LandingPage() {
   return (
@@ -123,13 +123,8 @@ export default function LandingPage() {
           </div>
         </header>
 
-        <section className="relative isolate -mt-[4.5rem] overflow-hidden bg-[color-mix(in_oklab,var(--brand-1)_14%,black)] text-white">
-          <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
-            <div className="absolute -left-40 top-10 h-[34rem] w-[46rem] rotate-12 rounded-[100%] bg-brand-1 opacity-70 blur-[110px] animate-glow" />
-            <div className="absolute -right-32 top-40 h-[32rem] w-[44rem] -rotate-12 rounded-[100%] bg-brand-3 opacity-60 blur-[120px] animate-glow [animation-delay:1.5s]" />
-            <div className="absolute left-1/3 top-80 h-[22rem] w-[40rem] rotate-[28deg] rounded-[100%] bg-brand-2 opacity-60 blur-[110px]" />
-            <div className="dot-grid absolute inset-0 opacity-30 [mask-image:radial-gradient(ellipse_70%_60%_at_50%_30%,black,transparent)]" />
-          </div>
+        {/* Same charcoal-to-glow background as the Home hero and the sign-in panel. */}
+        <section className="dash-hero relative isolate -mt-[4.5rem] overflow-hidden text-white">
 
           <div className={`${CONTAINER} pb-40 pt-36 text-center md:pb-56 md:pt-48`}>
             <p className="animate-fade-up">
@@ -161,10 +156,6 @@ export default function LandingPage() {
         <section className="relative isolate -mt-28 md:-mt-40">
           <div className={`${CONTAINER} pb-16 md:pb-24`}>
             <div className="relative animate-fade-up [animation-delay:500ms]">
-              <div
-                aria-hidden
-                className="absolute -inset-x-8 -top-10 bottom-10 -z-10 rounded-[2.5rem] bg-linear-to-b from-brand-1/30 via-brand-3/10 to-transparent blur-3xl"
-              />
               <HeroIllustration />
             </div>
           </div>
@@ -272,7 +263,7 @@ export default function LandingPage() {
           />
           <div className={`${CONTAINER} py-20 text-center md:py-28`}>
             <h2 className="mx-auto max-w-2xl text-balance text-3xl font-semibold tracking-[-0.03em] md:text-5xl">
-              Ship your next Android app <span className="text-brand">with a co-pilot.</span>
+              Ship your next Android app with a co-pilot.
             </h2>
             <div className="mt-9 flex flex-wrap justify-center gap-3">
               <OpenAppButton size="lg" className="bg-foreground text-background shadow-none" />
