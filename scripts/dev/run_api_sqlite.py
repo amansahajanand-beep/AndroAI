@@ -37,7 +37,7 @@ _dotenv = ROOT / ".env"
 if _dotenv.is_file():
     for _line in _dotenv.read_text(encoding="utf-8").splitlines():
         _name, _sep, _value = _line.partition("=")
-        if _sep and _name.strip() in ("NVIDIA_API_KEY", "NVIDIA_MODEL", "NVIDIA_BASE_URL"):
+        if _sep and _name.strip() in ("NVIDIA_API_KEY", "NVIDIA_MODEL", "NVIDIA_BASE_URL", "NVIDIA_MAX_OUTPUT_TOKENS"):
             os.environ.setdefault(_name.strip(), _value.split(" #", 1)[0].strip().strip("\"'"))
 
 import uvicorn  # noqa: E402

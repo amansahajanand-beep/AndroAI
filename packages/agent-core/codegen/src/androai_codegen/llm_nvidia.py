@@ -79,6 +79,11 @@ class NvidiaClient:
         self._transport = transport or _urllib_transport
         self._sleep = sleep
         self.usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+        # Optional override of the per-call reply limit (NVIDIA_MAX_OUTPUT_TOKENS in .env).
+        raw_limit = os.environ.get("NVIDIA_MAX_OUTPUT_TOKENS", "")
+        self.max_output_override = (
+            int(raw_limit) if raw_limit.isdigit() and int(raw_limit) > 0 else None
+        )
 
     def __repr__(self) -> str:  # never show the key
         return f"NvidiaClient(model={self.model!r})"
@@ -136,7 +141,7 @@ class NvidiaClient:
             {
                 "model": self.model,
                 "messages": messages,
-                "max_tokens": max_tokens,
+                "max_tokens": self.max_output_override or max_tokens,
                 "temperature": self.temperature,
                 "stream": False,
             }

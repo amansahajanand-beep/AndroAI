@@ -20,7 +20,7 @@ from androai_codegen.proposer import LlmClient
 
 from .modify_job import ModifyJobRequest, ModifyJobResult, run_modify_job
 
-_DOTENV_KEYS = ("NVIDIA_API_KEY", "NVIDIA_MODEL", "NVIDIA_BASE_URL")
+_DOTENV_KEYS = ("NVIDIA_API_KEY", "NVIDIA_MODEL", "NVIDIA_BASE_URL", "NVIDIA_MAX_OUTPUT_TOKENS")
 
 
 def load_dotenv(start: Path | None = None) -> Path | None:

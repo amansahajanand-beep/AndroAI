@@ -146,3 +146,17 @@ def test_reasoning_block_is_ignored_even_if_it_contains_braces():
     text = '<think>maybe {"edits": 1} hmm</think>\n' + json.dumps(GOOD)
     c, _ = client(reply(text))
     assert ask(c).notes == "n"
+
+
+def test_output_limit_can_be_overridden_from_the_environment(monkeypatch):
+    c, fake = client(reply(json.dumps(GOOD)))
+    ask(c)
+    assert fake.calls[0][2]["max_tokens"] == 500  # the caller's limit by default
+    monkeypatch.setenv("NVIDIA_MAX_OUTPUT_TOKENS", "24000")
+    c2, fake2 = client(reply(json.dumps(GOOD)))
+    ask(c2)
+    assert fake2.calls[0][2]["max_tokens"] == 24000
+    monkeypatch.setenv("NVIDIA_MAX_OUTPUT_TOKENS", "not-a-number")
+    c3, fake3 = client(reply(json.dumps(GOOD)))
+    ask(c3)
+    assert fake3.calls[0][2]["max_tokens"] == 500

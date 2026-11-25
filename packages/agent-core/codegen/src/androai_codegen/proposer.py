@@ -73,7 +73,7 @@ class ProposerConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     max_prompt_chars: int = Field(default=120_000, ge=2000)
-    max_output_tokens: int = Field(default=8000, ge=256)
+    max_output_tokens: int = Field(default=16000, ge=256)
 
 
 def _attr(value: str) -> str:
