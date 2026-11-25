@@ -358,15 +358,27 @@ def _run_job(
         _zip_project(factory, storage, project_id, zip_path)
 
         def progress(stage: str, text: str) -> None:
-            status = {"detect": "analyzing", "analyze": "analyzing", "retrieve": "planning", "generate": "generating"}
+            status = {
+                "detect": "analyzing",
+                "analyze": "analyzing",
+                "retrieve": "planning",
+                "generate": "generating",
+                "agent": "generating",
+            }
             if task_id not in STORE.cancelled:
                 _set_status(task_id, status.get(stage, "analyzing"), text)
 
+        with STORE.lock:
+            earlier = list(STORE.messages.get(project_id, []))[:-1]  # the last one is this prompt
+        history = tuple(
+            (m["role"], str(m["content"])[:1500]) for m in earlier[-8:] if m["role"] in ("user", "assistant")
+        )
         result = run_modify_job(
             ModifyJobRequest(
                 zip_path=zip_path,
                 prompt=prompt,
                 work_dir=work,
+                history=history,
                 attestation=OwnershipAttestation(
                     basis="own", statement="Uploaded by the project owner (dev bridge).", attested_by=str(user_id)[:60]
                 ),
@@ -420,6 +432,7 @@ def _finish(factory: sessionmaker, storage: ObjectStorage, project_id: str, task
             reply = _message(
                 "assistant",
                 f"I prepared {len(files)} change{'s' if len(files) != 1 else ''}. {summary}\n\n"
+                f"{_heads_up(result)}"
                 f"Static review: {result.review_summary or 'not run'}. This is not a compile check, "
                 "so please review the diff and build the project before relying on it.",
                 taskId=task_id,
@@ -489,3 +502,16 @@ def _cleanup_later(work: Path) -> None:
     import shutil
 
     threading.Timer(300, shutil.rmtree, args=(work,), kwargs={"ignore_errors": True}).start()
+
+
+def _heads_up(result) -> str:
+    """Deletions and similar high-impact changes, named up front: accepting the diff approves them."""
+    lines = []
+    for request in getattr(result, "deferred_approvals", ()):
+        shown = ", ".join(request.paths[:4]) + (" and more" if len(request.paths) > 4 else "")
+        label = request.kind.replace("_", " ")
+        lines.append(f"- {label}{': ' + shown if shown else ''}")
+    if not lines:
+        return ""
+    header = "Included for your review (accepting the diff approves them):"
+    return header + chr(10) + chr(10).join(lines) + chr(10) + chr(10)

@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
+from androai_codegen.agent.loop import AgentConfig, AgentEditProposer
 from androai_codegen.analysis import analyse_import
 from androai_codegen.detect import Detection, detect_zip
 from androai_codegen.editing import PatchEngine
@@ -72,6 +73,12 @@ class ModifyJobRequest(_Model):
     approved_deletions: tuple[str, ...] = ()
     approvals: tuple[str, ...] = ()
     max_plan_files: int = Field(default=MAX_PLAN_FILES, ge=1, le=40)
+    # "agent": a tool-using loop that explores the project and changes what it needs (the default).
+    # "single": one model call over files chosen up front (small, specific edits only).
+    mode: Literal["agent", "single"] = "agent"
+    # Earlier chat turns (role, text), so an answer to a question has its context.
+    history: tuple[tuple[str, str], ...] = ()
+    max_agent_steps: int = Field(default=40, ge=1, le=200)
 
 
 class ModifyJobResult(_Model):
@@ -89,6 +96,8 @@ class ModifyJobResult(_Model):
     )
     review_blocking: bool | None = None
     approval_requests: tuple[ApprovalRequest, ...] = ()
+    # Deletions and other approval-gated changes included for the user's review of the diff.
+    deferred_approvals: tuple[ApprovalRequest, ...] = ()
     problems: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     questions: tuple[
@@ -171,7 +180,8 @@ def run_modify_job(
         "warnings": tuple(bundle.notes),
     }
 
-    if bundle.confidence == "none" or not plan_files:
+    agent_mode = request.mode == "agent"
+    if not agent_mode and (bundle.confidence == "none" or not plan_files):
         return finish(
             status="needs_clarification",
             stage="retrieve",
@@ -186,19 +196,41 @@ def run_modify_job(
         user_request=request.prompt,
         plan=ModificationPlan(
             summary=request.prompt[:2000],
-            affected_files=plan_files,
+            affected_files=() if agent_mode else plan_files,
             conventions=bundle.conventions[:6],
         ),
-        context_files=impact,
+        context_files=() if agent_mode else impact,
         approved_deletions=request.approved_deletions,
         approvals=request.approvals,
+        # The agent decides which files to touch; the diff review in the UI is the approval.
+        scope="any" if agent_mode else "plan",
+        defer_approvals=agent_mode,
     )
-    step("generate", "Asking the model to propose the edits")
-    engine = PatchEngine(request.project_id, imported.workspace, imported.journal_dir)
+    if agent_mode:
+        step("generate", "Starting the assistant")
+        # A package rename moves hundreds of files, far above the default patch size.
+        engine = PatchEngine(
+            request.project_id, imported.workspace, imported.journal_dir, max_files=3000
+        )
+        proposer = AgentEditProposer(
+            client,
+            engine,
+            project_facts=_facts(detection, len(report.facts), bundle.conventions),
+            hints=(*plan_files, *impact),
+            conversation=request.history,
+            config=AgentConfig(max_steps=request.max_agent_steps),
+            progress=lambda text: step("agent", text),
+        )
+    else:
+        step("generate", "Asking the model to propose the edits")
+        engine = PatchEngine(
+            request.project_id, imported.workspace, imported.journal_dir
+        )
+        proposer = LlmEditProposer(client)
     outcome = run_modification(
         CheckpointManager(engine),
         ReviewSession(engine),
-        LlmEditProposer(client),
+        proposer,
         task,
         modify,
     )
@@ -215,6 +247,8 @@ def run_modify_job(
         review_summary=outcome.review.summary() if outcome.review else None,
         review_blocking=outcome.review.has_blocking if outcome.review else None,
         approval_requests=outcome.approval_requests,
+        deferred_approvals=outcome.deferred_approvals,
+        questions=(outcome.question,) if outcome.question else (),
         problems=tuple(
             f"[{p.code.value}] {p.path or 'patch'}: {p.message}"
             for p in outcome.problems
@@ -233,6 +267,7 @@ _STATUS: dict[ModifyOutcome, Status] = {
     ModifyOutcome.REJECTED: "rejected",
     ModifyOutcome.NO_PROGRESS: "no_progress",
     ModifyOutcome.PROVIDER_FAILURE: "provider_failure",
+    ModifyOutcome.NEEDS_CLARIFICATION: "needs_clarification",
 }
 
 
@@ -268,3 +303,15 @@ def _with_strings(plan_files: tuple[str, ...], workspace: Path) -> tuple[str, ..
         ):
             extra.append(candidate)
     return (*plan_files, *extra)
+
+
+def _facts(detection: Detection, fact_count: int, conventions: tuple[str, ...]) -> str:
+    lines = [
+        (
+            f"- native Android project; languages: {', '.join(detection.languages) or 'unknown'}; "
+            f"UI: {', '.join(detection.ui_toolkits) or 'unknown'}"
+        ),
+        f"- the static analysis found {fact_count} facts about it",
+    ]
+    lines += [f"- convention: {c}" for c in conventions[:6]]
+    return "\n".join(lines)

@@ -60,6 +60,7 @@ def todo_zip(tmp_path):
 def request(tmp_path, zip_path, prompt, **kw):
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
+    kw.setdefault("mode", "single")  # these tests script the one-shot proposer
     return ModifyJobRequest(
         zip_path=zip_path, prompt=prompt, work_dir=work, attestation=ATTEST, **kw
     )
@@ -156,12 +157,17 @@ def test_cli_prints_a_summary_and_json(tmp_path, todo_zip, capsys):
         PROMPT,
         "--work-dir",
         str(tmp_path / "w1"),
+        "--mode",
+        "single",
     ]
     assert cli.main(args, client=FakeClient(EDIT)) == 0
     out = capsys.readouterr().out
     assert "status: completed" in out and "----- diff -----" in out
     assert (
-        cli.main([*args[:-1], str(tmp_path / "w2"), "--json"], client=FakeClient(EDIT))
+        cli.main(
+            [*args[:5], str(tmp_path / "w2"), "--mode", "single", "--json"],
+            client=FakeClient(EDIT),
+        )
         == 0
     )
     assert json.loads(capsys.readouterr().out)["status"] == "completed"
@@ -195,3 +201,125 @@ def test_ui_code_changes_also_get_the_modules_strings_file(tmp_path, todo_zip):
     assert STRINGS in result.plan_files
     java_only = tuple(p for p in result.plan_files if p.endswith(".xml"))
     assert java_only  # resources stay editable alongside the code
+
+
+# ---- agent mode (the default) -------------------------------------------------------------------
+
+
+def step(tool, note="", **args):
+    return {"tool": tool, "args": args, "note": note}
+
+
+def agent_request(tmp_path, zip_path, prompt, **kw):
+    kw.setdefault("mode", "agent")
+    return request(tmp_path, zip_path, prompt, **kw)
+
+
+def test_agent_renames_the_package_and_edits_text_in_one_job(tmp_path, todo_zip):
+    client = FakeClient(
+        step("search", pattern="applicationId", glob="*.kts"),
+        step("rename_package", old="com.example.todo", new="com.acme.notes"),
+        step("edit_file", path=STRINGS, old="Nothing to do", new="All done"),
+        step("finish", summary="Renamed the package and reworded one string."),
+    )
+    seen = []
+    result = run_modify_job(
+        agent_request(tmp_path, todo_zip, "rename the package to com.acme.notes"),
+        client,
+        progress=lambda stage, text: seen.append((stage, text)),
+    )
+    assert result.status == "completed", result
+    paths = {p for _, p in result.changes}
+    assert (
+        "app/src/main/java/com/acme/notes/ui/TodoApp.kt" in paths and STRINGS in paths
+    )
+    assert result.diff and result.notes.startswith("Renamed the package")
+    assert any(r.kind == "delete_files" for r in result.deferred_approvals)
+    assert 'name="empty_list">All done' in (result.workspace / STRINGS).read_text()
+    assert (
+        result.workspace / "app/src/main/java/com/acme/notes/ui/TodoApp.kt"
+    ).is_file()
+    texts = [t for stage, t in seen if stage == "agent"]
+    assert texts[0].startswith("Searching") and any(
+        t.startswith("Renaming package") for t in texts
+    )
+
+
+def test_agent_asking_a_question_becomes_a_clarification(tmp_path, todo_zip):
+    client = FakeClient(
+        step("search", pattern="namespace"),
+        step("ask_user", question="What should the new package name be?"),
+    )
+    result = run_modify_job(
+        agent_request(tmp_path, todo_zip, "change the package name"), client
+    )
+    assert (
+        result.status == "needs_clarification"
+        and "new package name" in result.questions[0]
+    )
+    assert not result.changes
+
+
+def test_agent_gets_the_earlier_conversation_so_an_answer_has_context(
+    tmp_path, todo_zip
+):
+    client = FakeClient(step("finish", summary="nothing to do"))
+    history = (
+        ("user", "change the package name"),
+        ("assistant", "What should the new name be?"),
+    )
+    run_modify_job(
+        agent_request(tmp_path, todo_zip, "com.acme.notes", history=history), client
+    )
+    assert (
+        "change the package name" in client.prompts[0]
+        and "What should the new name" in client.prompts[0]
+    )
+
+
+def test_agent_does_not_give_up_on_a_vague_request_it_can_explore(tmp_path, todo_zip):
+    client = FakeClient(
+        step("list_dir", path=""), step("finish", summary="looked around, no change")
+    )
+    result = run_modify_job(
+        agent_request(tmp_path, todo_zip, "frobnicate the zxqv widget"), client
+    )
+    assert (
+        result.status == "no_progress" and client.prompts
+    )  # unlike single mode, the model ran
+
+
+def test_agent_failures_are_reported_not_raised(tmp_path, todo_zip):
+    result = run_modify_job(
+        agent_request(tmp_path, todo_zip, "x"), FakeClient(RuntimeError("down"))
+    )
+    assert result.status == "provider_failure" and not result.changes
+
+
+def test_agent_never_touches_the_uploaded_zip_or_unaccepted_files(tmp_path, todo_zip):
+    before = todo_zip.read_bytes()
+    client = FakeClient(
+        step("rename_package", old="com.example.todo", new="com.acme.notes"),
+        step("finish", summary="x"),
+    )
+    run_modify_job(agent_request(tmp_path, todo_zip, "rename"), client)
+    assert todo_zip.read_bytes() == before
+
+
+def test_cli_defaults_to_agent_mode(tmp_path, todo_zip, capsys):
+    client = FakeClient(
+        step("edit_file", path=STRINGS, old="Nothing to do", new="Empty"),
+        step("finish", summary="reworded"),
+    )
+    code = cli.main(
+        [
+            "--zip",
+            str(todo_zip),
+            "--prompt",
+            "reword the empty text",
+            "--work-dir",
+            str(tmp_path / "w"),
+        ],
+        client=client,
+    )
+    assert code == 0 and "status: completed" in capsys.readouterr().out

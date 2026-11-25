@@ -20,7 +20,12 @@ from androai_codegen.proposer import LlmClient
 
 from .modify_job import ModifyJobRequest, ModifyJobResult, run_modify_job
 
-_DOTENV_KEYS = ("NVIDIA_API_KEY", "NVIDIA_MODEL", "NVIDIA_BASE_URL", "NVIDIA_MAX_OUTPUT_TOKENS")
+_DOTENV_KEYS = (
+    "NVIDIA_API_KEY",
+    "NVIDIA_MODEL",
+    "NVIDIA_BASE_URL",
+    "NVIDIA_MAX_OUTPUT_TOKENS",
+)
 
 
 def load_dotenv(start: Path | None = None) -> Path | None:
@@ -49,6 +54,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--max-files", type=int, default=8, help="most files the model may edit"
+    )
+    parser.add_argument(
+        "--max-steps", type=int, default=40, help="most steps the agent may take (agent mode)"
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("agent", "single"),
+        default="agent",
+        help="agent: explores and edits step by step (default); single: one call over chosen files",
     )
     parser.add_argument(
         "--json", action="store_true", help="print the full result as JSON"
@@ -85,6 +99,9 @@ def render(result: ModifyJobResult) -> str:
         ]
     if result.review_summary:
         lines.append(f"static review: {result.review_summary}")
+    for request in result.deferred_approvals:
+        shown = ", ".join(request.paths[:3]) + (" ..." if len(request.paths) > 3 else "")
+        lines.append(f"included for your review: {request.kind} {shown}".rstrip())
     for request in result.approval_requests:
         lines.append(
             f"needs approval: {request.kind} {', '.join(request.paths)}: {request.reason}"
@@ -135,8 +152,11 @@ def main(argv: list[str], client: LlmClient | None = None) -> int:
                 attested_by=getpass.getuser()[:60] or "local-user",
             ),
             max_plan_files=args.max_files,
+            mode=args.mode,
+            max_agent_steps=args.max_steps,
         ),
         client,
+        progress=lambda stage, text: print(f"  [{stage}] {text}", file=sys.stderr, flush=True),
     )
     print(result.model_dump_json(indent=2) if args.json else render(result))
     return 0 if result.status == "completed" else 1

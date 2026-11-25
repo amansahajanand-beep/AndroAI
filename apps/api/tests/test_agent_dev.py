@@ -29,30 +29,31 @@ P = "/api/v1/projects"
 STRINGS = "app/src/main/res/values/strings.xml"
 EMPTY_LIST = '    <string name="empty_list">Nothing to do</string>'
 PROMPT = "Add a done label next to the empty_list string"
-EDIT = {
-    "edits": [
-        {
-            "action": "modify",
-            "path": STRINGS,
-            "description": "add a string",
-            "edits": [{"old": EMPTY_LIST, "new": EMPTY_LIST + '\n    <string name="done">Done</string>'}],
-        }
-    ],
-    "notes": "Added the done label.",
-}
+def step(tool, note="", **args):
+    return {"tool": tool, "args": args, "note": note}
+
+
+EDIT_STEPS = [
+    step("read_file", "look", path=STRINGS),
+    step("edit_file", "add a label", path=STRINGS, old=EMPTY_LIST, new=EMPTY_LIST + chr(10) + '    <string name="done">Done</string>'),
+    step("finish", summary="Added the done label."),
+]
 
 
 class FakeNvidia:
-    reply: object = EDIT
+    script: list = []
+    prompts: list = []
     usage = {"input_tokens": 11, "output_tokens": 7, "calls": 1}
 
     def __init__(self, *a, **kw):
         pass
 
     def complete_json(self, system, user, output, *, max_output_tokens):
-        if isinstance(self.reply, Exception):
-            raise self.reply
-        return output.model_validate(self.reply)
+        FakeNvidia.prompts.append(user)
+        item = FakeNvidia.script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return output.model_validate(item)
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +61,8 @@ def fake_model(monkeypatch):
     import androai_codegen.llm_nvidia as nv
 
     monkeypatch.setattr(nv, "NvidiaClient", FakeNvidia)
-    FakeNvidia.reply = EDIT
+    FakeNvidia.script = list(EDIT_STEPS)
+    FakeNvidia.prompts = []
     with agent_dev.STORE.lock:
         agent_dev.STORE.__init__()
     yield
@@ -162,11 +164,25 @@ def test_other_tenants_cannot_see_tasks_or_change_sets(client, todo_project, bob
     assert client.get(f"{A}/tasks", headers=hb).json() == []
 
 
-def test_unmatched_request_blocks_with_a_question(client, todo_project):
+def test_agent_question_blocks_the_task_and_the_answer_continues_the_conversation(client, todo_project):
     pid, h = todo_project
-    out = send(client, h, pid, "frobnicate the zxqv widget")
-    task = wait_done(client, h, out["task"]["id"])
-    assert task["status"] == "blocked" and "Which screen" in task["blockedReason"]
+    FakeNvidia.script = [
+        step("search", pattern="applicationId"),
+        step("ask_user", question="What should the new package name be?"),
+    ]
+    task = wait_done(client, h, send(client, h, pid, "change the package name")["task"]["id"])
+    assert task["status"] == "blocked" and "new package name" in task["blockedReason"]
+    messages = client.get(f"{A}/projects/{pid}/messages", headers=h).json()
+    assert "new package name" in messages[-1]["content"]
+    # the person answers in a new message; the agent is shown the earlier question
+    FakeNvidia.script = [
+        step("rename_package", old="com.example.todo", new="com.acme.notes"),
+        step("finish", summary="Renamed."),
+    ]
+    FakeNvidia.prompts = []
+    second = wait_done(client, h, send(client, h, pid, "com.acme.notes")["task"]["id"])
+    assert second["status"] == "completed"
+    assert "change the package name" in FakeNvidia.prompts[0] and "new package name be" in FakeNvidia.prompts[0]
 
 
 def test_chat_intent_gets_an_honest_reply_and_no_task(client, todo_project):
@@ -190,7 +206,7 @@ def test_missing_model_key_fails_the_task_with_a_clear_message(client, todo_proj
 
 
 def test_model_failure_fails_the_task_and_changes_nothing(client, todo_project):
-    FakeNvidia.reply = RuntimeError("model exploded")
+    FakeNvidia.script = [RuntimeError("model exploded")]
     pid, h = todo_project
     task = wait_done(client, h, send(client, h, pid)["task"]["id"])
     assert task["status"] == "failed" and "exploded" not in (task["errorMessage"] or "")
@@ -212,3 +228,34 @@ def test_event_stream_replays_and_ends_when_the_task_is_done(client, todo_projec
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
     for name in ("timeline.appended", "task.updated", "changeset.ready", "message.completed"):
         assert f"event: {name}" in r.text
+
+
+def test_package_rename_flows_through_the_panel_and_accepting_applies_it(client, todo_project):
+    pid, h = todo_project
+    FakeNvidia.script = [
+        step("rename_package", "rename", old="com.example.todo", new="com.acme.notes"),
+        step("finish", summary="Renamed the package."),
+    ]
+    task = wait_done(client, h, send(client, h, pid, "rename the package to com.acme.notes")["task"]["id"])
+    assert task["status"] == "completed", task
+    msgs = client.get(f"{A}/projects/{pid}/messages", headers=h).json()
+    assistant = [m for m in msgs if m.get("changeSetId")][-1]
+    assert "Included for your review" in assistant["content"] and "delete files" in assistant["content"]
+    cs = client.get(f"{A}/change-sets/{assistant['changeSetId']}", headers=h).json()
+    kinds = {f["changeType"] for f in cs["files"]}
+    assert {"add", "delete"} <= kinds
+    old_path = "app/src/main/java/com/example/todo/ui/TodoApp.kt"
+    new_path = "app/src/main/java/com/acme/notes/ui/TodoApp.kt"
+    assert client.get(f"{P}/{pid}/files/content", headers=h, params={"path": old_path}).status_code == 200
+    accept = [f["path"] for f in cs["files"]]
+    done = client.post(f"{A}/change-sets/{assistant['changeSetId']}/decision", headers=h, json={"acceptPaths": accept})
+    assert done.status_code == 200 and done.json()["status"] == "applied"
+    assert client.get(f"{P}/{pid}/files/content", headers=h, params={"path": old_path}).status_code == 404
+    assert "package com.acme.notes.ui" in file_text(client, h, pid, new_path)
+
+
+def test_every_agent_step_appears_on_the_timeline(client, todo_project):
+    pid, h = todo_project
+    task = wait_done(client, h, send(client, h, pid)["task"]["id"])
+    titles = [e["title"] for e in client.get(f"{A}/tasks/{task['id']}/timeline", headers=h).json()]
+    assert any(t.startswith("Reading") for t in titles) and any(t.startswith("Editing") for t in titles)

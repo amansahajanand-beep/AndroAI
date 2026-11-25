@@ -69,6 +69,13 @@ class ModificationTask(_Model):
     context_files: tuple[str, ...] = ()  # read-only files shown to the proposer as well
     approved_deletions: tuple[str, ...] = ()
     approvals: tuple[str, ...] = ()  # ApprovalKind values the user granted
+    # "plan": only files the plan names may change. "any": any non-protected file may (an agent that
+    # explores the project decides for itself); the caller must then review the diff.
+    scope: Literal["plan", "any"] = "plan"
+    # True when the caller shows the whole diff to the user before anything real is written (so that
+    # review IS the approval): deletions and approval-gated findings are let through and listed in
+    # ``ModifyResult.deferred_approvals`` instead of stopping the run.
+    defer_approvals: bool = False
 
 
 class ModifyConfig(_Model):
@@ -104,6 +111,11 @@ class ProposedEdit(_Model):
 class ProposedEdits(_Model):
     edits: tuple[ProposedEdit, ...] = ()
     notes: str = ""
+    # Checksums of the real files the edits were made against (an agent reads them itself); lets
+    # the executor detect that the user changed a file in the meantime.
+    base_checksums: dict[str, str] = Field(default_factory=dict)
+    # Set instead of edits when the proposer needs an answer from the person first.
+    question: str | None = None
 
 
 class EditProposer(Protocol):
@@ -121,6 +133,7 @@ class ModifyOutcome(StrEnum):
     REJECTED = "rejected"  # nothing applied: out of scope, conflict, invalid, review blocked
     NO_PROGRESS = "no_progress"  # the proposer changed nothing
     PROVIDER_FAILURE = "provider_failure"  # the proposer failed; source untouched
+    NEEDS_CLARIFICATION = "needs_clarification"  # the proposer asked a question; nothing applied
 
 
 class ApprovalRequest(_Model):
@@ -141,6 +154,9 @@ class ModifyResult(_Model):
     warnings: tuple[str, ...] = ()
     attempts: int = 0
     notes: str = ""
+    question: str | None = None
+    # Approval-gated changes that were let through because the caller reviews the diff.
+    deferred_approvals: tuple[ApprovalRequest, ...] = ()
 
 
 # --- the executor ------------------------------------------------------------------------------
@@ -193,6 +209,13 @@ def run_modification(
                 warnings=(*warnings, _provider_warning(exc)),
                 attempts=attempts,
             )
+        if proposal.question and not proposal.edits:
+            return ModifyResult(
+                outcome=ModifyOutcome.NEEDS_CLARIFICATION,
+                question=proposal.question,
+                warnings=tuple(warnings),
+                attempts=attempts,
+            )
         if not proposal.edits:
             return ModifyResult(
                 outcome=ModifyOutcome.NO_PROGRESS,
@@ -201,7 +224,7 @@ def run_modification(
                 notes=proposal.notes[:500],
             )
 
-        problems = scope.check(proposal.edits)
+        problems = scope.check(proposal.edits, open_scope=task.scope == "any")
         patch: PatchSet | None = None
         if not problems:
             patch, problems = _build_patch(task, proposal, checksums, cut)
@@ -214,6 +237,17 @@ def run_modification(
 
         assert patch is not None
         approved = set(task.approved_deletions)
+        deleted = sorted(c.path for c in patch.changes if isinstance(c, DeleteFile))
+        deferred: list[ApprovalRequest] = []
+        if task.defer_approvals and deleted:
+            approved |= set(deleted)
+            deferred.append(
+                ApprovalRequest(
+                    kind="delete_files",
+                    paths=tuple(deleted),
+                    reason="the change deletes these files",
+                )
+            )
         review = session.review_patch(patch, approved_deletions=approved)
         last_review = review.report
         preview = review.simulation.preview
@@ -227,7 +261,10 @@ def run_modification(
             continue
         report = review.report
         assert report is not None
-        needs, blocking = _split_findings(report, task.approvals)
+        needs, blocking = _split_findings(report, task.approvals, defer=task.defer_approvals)
+        if task.defer_approvals:
+            deferred.extend(needs)
+            needs = []
         if needs:
             return ModifyResult(
                 outcome=ModifyOutcome.NEEDS_APPROVAL,
@@ -251,9 +288,10 @@ def run_modification(
             )
             continue
 
-        return _apply(
+        result = _apply(
             manager, session, patch, approved, task, cfg, report, warnings, attempts, proposal.notes
         )
+        return result.model_copy(update={"deferred_approvals": tuple(deferred)})
 
     return ModifyResult(  # pragma: no cover - the loop always returns
         outcome=ModifyOutcome.REJECTED,
@@ -333,7 +371,7 @@ class _Scope:
             norm(task.context_files),
         )
 
-    def check(self, edits: Iterable[ProposedEdit]) -> list[Problem]:
+    def check(self, edits: Iterable[ProposedEdit], *, open_scope: bool = False) -> list[Problem]:
         problems: list[Problem] = []
         seen: set[str] = set()
         for edit in edits:
@@ -356,7 +394,7 @@ class _Scope:
             allowed = {"modify": self.modify, "create": self.create, "delete": self.delete}[
                 edit.action
             ]
-            if path not in allowed:
+            if path not in allowed and not open_scope:
                 problems.append(
                     Problem(
                         code=ProblemCode.CONFLICT,
@@ -412,7 +450,7 @@ def _build_patch(task: ModificationTask, proposal: ProposedEdits, checksums, cut
                 CreateFile(path=path, content=edit.content, description=edit.description)
             )
             continue
-        checksum = checksums.get(path)
+        checksum = checksums.get(path) or proposal.base_checksums.get(path)
         if checksum is None:
             problems.append(
                 Problem(
@@ -524,9 +562,12 @@ def _needs_approval(
     )
 
 
-def _split_findings(report: ReviewReport, granted: Iterable[str]):
-    """Blocking findings that need an approval the user has not given, and ones that do not."""
-    granted_set = set(granted)
+def _split_findings(report: ReviewReport, granted: Iterable[str], *, defer: bool = False):
+    """Blocking findings that need an approval the user has not given, and ones that do not.
+
+    With ``defer`` every approval-gated finding is returned as needing approval, for the caller to
+    list as deferred to the diff review rather than stop the run."""
+    granted_set = set() if defer else set(granted)
     needs: dict[str, list[str]] = {}
     blocking = []
     for finding in report.blocking_findings:

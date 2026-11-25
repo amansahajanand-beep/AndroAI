@@ -160,3 +160,30 @@ def test_output_limit_can_be_overridden_from_the_environment(monkeypatch):
     c3, fake3 = client(reply(json.dumps(GOOD)))
     ask(c3)
     assert fake3.calls[0][2]["max_tokens"] == 500
+
+
+def test_several_objects_in_one_reply_take_the_first_without_a_repair_call():
+    two = json.dumps(GOOD) + json.dumps({"edits": [], "notes": "second"})
+    c, fake = client(reply(two))
+    assert ask(c).notes == "n" and len(fake.calls) == 1
+    spaced = json.dumps(GOOD) + chr(10) + json.dumps({"edits": [], "notes": "second"})
+    c2, fake2 = client(reply(spaced))
+    assert ask(c2).notes == "n" and len(fake2.calls) == 1
+
+
+def test_first_object_is_found_after_prose_and_before_more_prose():
+    text = "I will do this first: " + json.dumps(GOOD) + " and then more text {not json"
+    c, _ = client(reply(text))
+    assert ask(c).notes == "n"
+
+
+def test_debug_dump_is_off_unless_asked_for(tmp_path, monkeypatch):
+    monkeypatch.delenv("NVIDIA_DEBUG_DIR", raising=False)
+    c, _ = client(reply("nope"), reply("still nope"))
+    with pytest.raises(LlmError):
+        ask(c)
+    monkeypatch.setenv("NVIDIA_DEBUG_DIR", str(tmp_path / "dbg"))
+    c2, _ = client(reply("nope"), reply("still nope"))
+    with pytest.raises(LlmError):
+        ask(c2)
+    assert len(list((tmp_path / "dbg").glob("bad_reply_*.txt"))) == 2

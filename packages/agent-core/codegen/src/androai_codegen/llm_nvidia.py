@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -121,6 +122,7 @@ class NvidiaClient:
             try:
                 return output.model_validate(_extract_json(text))
             except (ValueError, ValidationError) as exc:
+                _debug_dump(text)
                 last_problem = type(exc).__name__
                 messages = [
                     *messages,
@@ -213,8 +215,37 @@ def _extract_json(text: str) -> object:
             return json.loads(candidate)
         except ValueError:
             continue
+    # Several objects back to back ({...}{...}) or trailing prose: take the FIRST complete one.
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        for match in re.finditer(r"\{", candidate):
+            try:
+                value, _ = decoder.raw_decode(candidate, match.start())
+            except ValueError:
+                continue
+            if isinstance(value, dict):
+                return value
     raise ValueError("no JSON object found")
 
 
 def _short_error(exc: Exception) -> str:
     return str(exc).replace("\n", " ")[:300]
+
+
+_dump_counter = 0
+
+
+def _debug_dump(text: str) -> None:
+    """Opt-in (NVIDIA_DEBUG_DIR): keep a reply that could not be parsed, to see what the model said.
+    The reply may contain project code, so this is for local debugging only."""
+    global _dump_counter
+    folder = os.environ.get("NVIDIA_DEBUG_DIR")
+    if not folder:
+        return
+    try:
+        target = Path(folder)
+        target.mkdir(parents=True, exist_ok=True)
+        _dump_counter += 1
+        (target / f"bad_reply_{_dump_counter}.txt").write_text(text[:100_000], encoding="utf-8")
+    except OSError:
+        pass
