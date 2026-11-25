@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -107,8 +108,19 @@ def run_modify_job(
     *,
     retrieval: RetrievalConfig | None = None,
     modify: ModifyConfig | None = None,
+    progress: Callable[[str, str], None] | None = None,
 ) -> ModifyJobResult:
+    """``progress(stage, text)`` is called as each step starts; it must not raise or block."""
     started = time.monotonic()
+
+    def step(stage: str, text: str) -> None:
+        if progress is not None:
+            try:
+                progress(stage, text)
+            except Exception:  # noqa: BLE001, S110  (a broken listener must never break the job)
+                pass
+
+    step("detect", "Checking the project type")
 
     def finish(**values) -> ModifyJobResult:
         return ModifyJobResult(seconds=round(time.monotonic() - started, 1), **values)
@@ -122,6 +134,7 @@ def run_modify_job(
             problems=(detection.reason,),
         )
 
+    step("analyze", "Importing and analysing the project")
     try:
         imported = import_zip(
             request.zip_path,
@@ -141,6 +154,10 @@ def run_modify_job(
 
     workspace = imported.workspace.root
     report = analyse_import(imported)
+    step(
+        "retrieve",
+        f"Analysed {len(report.facts)} facts; choosing the files for your request",
+    )
     bundle = retrieve_context(report, request.prompt, retrieval)
     plan_files = _with_strings(_plan_files(bundle, request.max_plan_files), workspace)
     impact = tuple(f.path for f in bundle.impact[:5])
@@ -176,6 +193,7 @@ def run_modify_job(
         approved_deletions=request.approved_deletions,
         approvals=request.approvals,
     )
+    step("generate", "Asking the model to propose the edits")
     engine = PatchEngine(request.project_id, imported.workspace, imported.journal_dir)
     outcome = run_modification(
         CheckpointManager(engine),

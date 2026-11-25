@@ -27,6 +27,19 @@ os.environ.setdefault("STORAGE_BACKEND", "local")
 os.environ.setdefault("STORAGE_LOCAL_PATH", str(DATA / "storage"))
 os.environ.setdefault("APP_URL", "http://localhost:3000")
 
+# AI assistant bridge: run the code-modification job inside this process (dev only). It needs the
+# codegen library and the ai-agent job module importable, and the NVIDIA_* settings from .env.
+os.environ.setdefault("AGENT_DEV_BRIDGE", "1")
+for _src in (ROOT / "packages/agent-core/codegen/src", ROOT / "workers/ai-agent/src"):
+    if str(_src) not in sys.path:
+        sys.path.insert(0, str(_src))
+_dotenv = ROOT / ".env"
+if _dotenv.is_file():
+    for _line in _dotenv.read_text(encoding="utf-8").splitlines():
+        _name, _sep, _value = _line.partition("=")
+        if _sep and _name.strip() in ("NVIDIA_API_KEY", "NVIDIA_MODEL", "NVIDIA_BASE_URL"):
+            os.environ.setdefault(_name.strip(), _value.split(" #", 1)[0].strip().strip("\"'"))
+
 import uvicorn  # noqa: E402
 from sqlalchemy import create_engine, event, select  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402

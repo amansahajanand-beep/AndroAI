@@ -1,6 +1,6 @@
 /**
  * Live transport: maps every contract endpoint key onto the FastAPI backend (docs/API.md).
- * Keys without a handler (agent, billing, usage, preview, terminal, UI editor...) answer
+ * Keys without a handler (billing, usage, preview, terminal, UI editor...) answer
  * 501 `not_implemented`, which screens render as their "waiting for backend" state.
  */
 import type {
@@ -247,6 +247,17 @@ const handlers: Partial<Record<EndpointKey, Handler>> = {
       }),
     );
   },
+
+  /* ---- agent (dev bridge; camelCase on the wire already, so no mapping) ---- */
+  "agent.tasks.list": (r) => get(r, `${API}/agent/tasks`, { projectId: r.query.projectId as string | undefined, status: r.query.status as string | undefined }),
+  "agent.tasks.get": (r) => get(r, `${API}/agent/tasks/${encodeURIComponent(r.params.taskId ?? "")}`),
+  "agent.tasks.timeline": (r) => get(r, `${API}/agent/tasks/${encodeURIComponent(r.params.taskId ?? "")}/timeline`),
+  "agent.tasks.cancel": (r) => send(r, "POST", `${API}/agent/tasks/${encodeURIComponent(r.params.taskId ?? "")}/cancel`),
+  "agent.messages.list": (r) => get(r, `${API}/agent/projects/${pid(r)}/messages`),
+  "agent.messages.send": (r) => send(r, "POST", `${API}/agent/projects/${pid(r)}/messages`, r.body),
+  "agent.changeSets.get": (r) => get(r, `${API}/agent/change-sets/${encodeURIComponent(r.params.changeSetId ?? "")}`),
+  "agent.changeSets.decide": (r) =>
+    send(r, "POST", `${API}/agent/change-sets/${encodeURIComponent(r.params.changeSetId ?? "")}/decision`, r.body),
 
   /* ---- admin ---- */
   "admin.overview": async (r): Promise<AdminOverview> => mapOverview(await get<BOverview>(r, `${API}/admin/overview`)),

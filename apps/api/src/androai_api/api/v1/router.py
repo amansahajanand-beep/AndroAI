@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Response, status
 
 from ...db import check_database
@@ -26,4 +28,9 @@ router.include_router(admin_workers.router, prefix="/admin")
 router.include_router(builds.router, prefix="/builds")
 router.include_router(testruns.router, prefix="/tests")
 router.include_router(worker.router, prefix="/worker")
-# Not yet implemented (see docs/BACKEND_PROGRESS.md): /agent, /usage, /billing
+if os.environ.get("AGENT_DEV_BRIDGE") == "1":
+    # DEV ONLY: in-process stand-in for the agent API (see agent_dev.py). Never set in production.
+    from . import agent_dev
+
+    router.include_router(agent_dev.router, prefix="/agent")
+# Not yet implemented (see docs/BACKEND_PROGRESS.md): /agent (except the dev bridge), /usage, /billing

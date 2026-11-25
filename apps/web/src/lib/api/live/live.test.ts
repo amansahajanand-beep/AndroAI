@@ -136,7 +136,7 @@ describe("401 handling", () => {
 
 describe("pending features", () => {
   it("answers 501 not_implemented for endpoints with no backend, which screens show as 'waiting'", async () => {
-    for (const key of ["agent.tasks.list", "billing.plans", "usage.summary", "preview.start", "ui.screens", "projects.terminal.create", "tests.cases"] as const) {
+    for (const key of ["billing.plans", "usage.summary", "preview.start", "ui.screens", "projects.terminal.create", "tests.cases"] as const) {
       const e = await call(key, { params: { projectId: "p", taskId: "t", jobId: "j" } }).catch((x) => x);
       expect(e).toMatchObject({ status: 501, code: "not_implemented", endpoint: key });
       expect(isPendingBackend(e)).toBe(true);
@@ -153,7 +153,7 @@ describe("pending features", () => {
     const live = (Object.keys(ENDPOINTS) as EndpointKey[]).filter((k) => ENDPOINTS[k].status === "live" && ENDPOINTS[k].method !== "SSE");
     for (const key of live) {
       calls.length = 0;
-      const e = await call(key, { params: { projectId: "p", buildId: "b", jobId: "j", artifactId: "a", uploadId: "u" }, query: { path: "x", q: "y" }, body: {} }).catch((x) => x);
+      const e = await call(key, { params: { projectId: "p", buildId: "b", jobId: "j", artifactId: "a", uploadId: "u", taskId: "t", changeSetId: "c" }, query: { path: "x", q: "y" }, body: {} }).catch((x) => x);
       expect((e as { code?: string } | undefined)?.code, `${key} is marked live but has no handler`).not.toBe("not_implemented");
     }
   });
@@ -279,6 +279,29 @@ describe("tests and admin", () => {
   it("an unreachable backend (no error envelope, 502) is a waiting state, not a crash", async () => {
     responders.push(() => ({ status: 502, body: "<html>bad gateway</html>" }));
     const e = await call("projects.list").catch((x) => x);
+    expect(isPendingBackend(e)).toBe(true);
+  });
+});
+
+describe("agent (dev bridge)", () => {
+  it("passes messages, tasks and change sets straight through", async () => {
+    const message = { id: "m1", role: "user", content: "hi", createdAt: "2026-01-01T00:00:00Z" };
+    const task = { id: "t1", projectId: "p1", status: "queued" };
+    const changeSet = { id: "c1", taskId: "t1", summary: "s", status: "applied", files: [] };
+    responders.push(on("GET", "/api/v1/agent/projects/p1/messages", [message]));
+    responders.push(on("POST", "/api/v1/agent/projects/p1/messages", { message, task }, 201));
+    responders.push(on("GET", "/api/v1/agent/tasks/t1", task));
+    responders.push(on("POST", "/api/v1/agent/change-sets/c1/decision", changeSet));
+    expect(await call("agent.messages.list", { params: { projectId: "p1" } })).toEqual([message]);
+    const sent = await call("agent.messages.send", { params: { projectId: "p1" }, body: { prompt: "x", intent: "modify", context: {} } });
+    expect(sent).toEqual({ message, task });
+    expect(await call("agent.tasks.get", { params: { taskId: "t1" } })).toEqual(task);
+    expect(await call("agent.changeSets.decide", { params: { changeSetId: "c1" }, body: { acceptPaths: ["a"] } })).toEqual(changeSet);
+  });
+
+  it("a backend without the bridge (404) still reads as 'waiting for backend'", async () => {
+    responders.push((c) => (c.url.includes("/agent/") ? { status: 404, body: { detail: "Not Found" } } : undefined));
+    const e = await call("agent.messages.list", { params: { projectId: "p1" } }).catch((x) => x);
     expect(isPendingBackend(e)).toBe(true);
   });
 });

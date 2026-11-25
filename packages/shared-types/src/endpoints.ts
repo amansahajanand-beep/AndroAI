@@ -66,16 +66,17 @@ export const ENDPOINTS = {
   "projects.files.move": e("POST", "/api/v1/projects/{projectId}/files/move", B, "live"),
   "projects.files.delete": e("DELETE", "/api/v1/projects/{projectId}/files?path=&recursive=true", B, "live"),
   "projects.files.search": e("GET", "/api/v1/projects/{projectId}/files/search?q=", B, "live"),
-  // agent (orchestration API surface not exposed yet)
-  "agent.tasks.list": e("GET", "/api/v1/agent/tasks", A, "planned"),
-  "agent.tasks.get": e("GET", "/api/v1/agent/tasks/{taskId}", A, "planned"),
-  "agent.tasks.timeline": e("GET", "/api/v1/agent/tasks/{taskId}/timeline", A, "planned"),
-  "agent.tasks.cancel": e("POST", "/api/v1/agent/tasks/{taskId}/cancel", A, "planned"),
-  "agent.tasks.events": e("SSE", "/api/v1/agent/tasks/{taskId}/events", A, "planned"),
-  "agent.messages.list": e("GET", "/api/v1/agent/projects/{projectId}/messages", A, "planned"),
-  "agent.messages.send": e("POST", "/api/v1/agent/projects/{projectId}/messages", A, "planned"),
-  "agent.changeSets.get": e("GET", "/api/v1/agent/change-sets/{changeSetId}", A, "planned"),
-  "agent.changeSets.decide": e("POST", "/api/v1/agent/change-sets/{changeSetId}/decision", A, "planned"),
+  // agent: served by the dev-only in-process bridge (apps/api .../agent_dev.py, AGENT_DEV_BRIDGE=1);
+  // a real deployment answers 404 here, which screens show as "waiting for backend"
+  "agent.tasks.list": e("GET", "/api/v1/agent/tasks", A, "live"),
+  "agent.tasks.get": e("GET", "/api/v1/agent/tasks/{taskId}", A, "live"),
+  "agent.tasks.timeline": e("GET", "/api/v1/agent/tasks/{taskId}/timeline", A, "live"),
+  "agent.tasks.cancel": e("POST", "/api/v1/agent/tasks/{taskId}/cancel", A, "live"),
+  "agent.tasks.events": e("SSE", "/api/v1/agent/tasks/{taskId}/events", A, "live"),
+  "agent.messages.list": e("GET", "/api/v1/agent/projects/{projectId}/messages", A, "live"),
+  "agent.messages.send": e("POST", "/api/v1/agent/projects/{projectId}/messages", A, "live"),
+  "agent.changeSets.get": e("GET", "/api/v1/agent/change-sets/{changeSetId}", A, "live"),
+  "agent.changeSets.decide": e("POST", "/api/v1/agent/change-sets/{changeSetId}/decision", A, "live"),
   // builds
   "builds.list": e("GET", "/api/v1/builds", B, "live"),
   "builds.get": e("GET", "/api/v1/builds/{buildId}", B, "live"),
