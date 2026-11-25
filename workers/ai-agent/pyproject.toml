@@ -9,6 +9,7 @@ description = "Code-generation agent worker."
 requires-python = ">=3.11"
 dependencies = [
     "androai-contracts",
+    "androai-codegen",
     "celery[redis]>=5.4",
 ]
 
