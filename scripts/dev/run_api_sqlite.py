@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA = ROOT / ".data" / "dev"
+DATA = Path(os.environ.get("DEV_DATA_DIR") or ROOT / ".data" / "dev")
 DATA.mkdir(parents=True, exist_ok=True)
 
 os.environ.setdefault("ENVIRONMENT", "development")
@@ -43,7 +43,6 @@ if _dotenv.is_file():
 import uvicorn  # noqa: E402
 from sqlalchemy import create_engine, event, select  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
-from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from androai_api import rate_limit, security  # noqa: E402
 from androai_api.db import get_db, get_session_factory, models  # noqa: E402,F401
@@ -52,12 +51,17 @@ from androai_api.main import app  # noqa: E402
 from androai_api.models import User, UserRole  # noqa: E402
 from androai_api.services import rbac  # noqa: E402
 
-engine = create_engine(f"sqlite:///{DATA / 'dev.db'}", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+# One connection per session (the default pool). A single shared connection (StaticPool) is NOT safe
+# once several threads use it at once, which the agent bridge and the SSE streams do: it returns
+# garbled rows and can crash the interpreter. WAL lets readers and the one writer coexist.
+engine = create_engine(f"sqlite:///{DATA / 'dev.db'}", connect_args={"check_same_thread": False, "timeout": 30})
 
 
 @event.listens_for(engine, "connect")
 def _fk(conn, _):
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
 
 
 Base.metadata.create_all(engine)
