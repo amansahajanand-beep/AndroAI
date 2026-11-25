@@ -92,6 +92,20 @@ class NvidiaClient:
     def complete_json(
         self, system: str, user: str, output: type[T], *, max_output_tokens: int
     ) -> T:
+        return self._complete(system, user, output, max_output_tokens, 1)[0]
+
+    def complete_json_many(
+        self, system: str, user: str, output: type[T], *, max_output_tokens: int, limit: int = 5
+    ) -> list[T]:
+        """Like ``complete_json`` but returns every valid object in the reply (up to ``limit``).
+
+        Some models answer a "next step" prompt with several steps in a row; this keeps them instead
+        of throwing all but the first away. Pieces that do not validate are skipped."""
+        return self._complete(system, user, output, max_output_tokens, max(1, limit))
+
+    def _complete(
+        self, system: str, user: str, output: type[T], max_output_tokens: int, limit: int
+    ) -> list[T]:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         schema_hint = json.dumps(output.model_json_schema())[:6000]
         messages[0]["content"] += f"\n\nThe JSON must satisfy this JSON Schema:\n{schema_hint}"
@@ -99,6 +113,8 @@ class NvidiaClient:
         cut_off = False
         for _attempt in (1, 2):  # one corrective attempt
             text, truncated = self._chat(messages, max_output_tokens)
+            if os.environ.get("NVIDIA_DEBUG_ALL") == "1":
+                _debug_dump(text, prefix="reply")
             if truncated:
                 if cut_off:
                     raise LlmError(
@@ -120,7 +136,7 @@ class NvidiaClient:
                 ]
                 continue
             try:
-                return output.model_validate(_extract_json(text))
+                return _parse_objects(text, output, limit)
             except (ValueError, ValidationError) as exc:
                 _debug_dump(text)
                 last_problem = type(exc).__name__
@@ -228,6 +244,39 @@ def _extract_json(text: str) -> object:
     raise ValueError("no JSON object found")
 
 
+def _parse_objects(text: str, output: type[T], limit: int) -> list[T]:
+    """The valid ``output`` objects in a reply, in order. Raises if there is none.
+
+    With ``limit == 1`` this is the old behaviour (the first object, strictly validated); with more,
+    objects that are not valid ``output`` are skipped, which also drops the argument dictionaries of
+    a malformed multi-step reply."""
+    if limit == 1:
+        return [output.model_validate(_extract_json(text))]
+    found: list[T] = []
+    decoder = json.JSONDecoder()
+    position = 0
+    for candidate in [text, *_FENCE.findall(text)]:
+        position = 0
+        while len(found) < limit:
+            start = candidate.find("{", position)
+            if start < 0:
+                break
+            try:
+                value, end = decoder.raw_decode(candidate, start)
+            except ValueError:
+                position = start + 1
+                continue
+            position = end
+            if isinstance(value, dict):
+                try:
+                    found.append(output.model_validate(value))
+                except ValidationError:
+                    continue
+        if found:
+            return found
+    raise ValueError("no valid JSON object found")
+
+
 def _short_error(exc: Exception) -> str:
     return str(exc).replace("\n", " ")[:300]
 
@@ -235,7 +284,7 @@ def _short_error(exc: Exception) -> str:
 _dump_counter = 0
 
 
-def _debug_dump(text: str) -> None:
+def _debug_dump(text: str, prefix: str = "bad_reply") -> None:
     """Opt-in (NVIDIA_DEBUG_DIR): keep a reply that could not be parsed, to see what the model said.
     The reply may contain project code, so this is for local debugging only."""
     global _dump_counter
@@ -246,6 +295,6 @@ def _debug_dump(text: str) -> None:
         target = Path(folder)
         target.mkdir(parents=True, exist_ok=True)
         _dump_counter += 1
-        (target / f"bad_reply_{_dump_counter}.txt").write_text(text[:100_000], encoding="utf-8")
+        (target / f"{prefix}_{_dump_counter:03d}.txt").write_text(text[:100_000], encoding="utf-8")
     except OSError:
         pass

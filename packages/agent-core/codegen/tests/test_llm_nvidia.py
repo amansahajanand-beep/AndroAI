@@ -187,3 +187,29 @@ def test_debug_dump_is_off_unless_asked_for(tmp_path, monkeypatch):
     with pytest.raises(LlmError):
         ask(c2)
     assert len(list((tmp_path / "dbg").glob("bad_reply_*.txt"))) == 2
+
+
+def ask_many(c, limit=5):
+    return c.complete_json_many("sys", "user", ProposedEdits, max_output_tokens=500, limit=limit)
+
+
+def test_several_objects_can_all_be_kept():
+    a = {"edits": [], "notes": "one"}
+    b = {"edits": [], "notes": "two"}
+    text = json.dumps(a) + chr(10) + json.dumps(b) + json.dumps({"edits": [], "notes": "three"})
+    c, fake = client(reply(text))
+    assert [x.notes for x in ask_many(c)] == ["one", "two", "three"] and len(fake.calls) == 1
+    c2, _ = client(reply(text))
+    assert [x.notes for x in ask_many(c2, limit=2)] == ["one", "two"]
+
+
+def test_pieces_that_are_not_valid_are_skipped_not_fatal():
+    # the second "object" is the argument dictionary of a malformed step
+    text = json.dumps({"edits": [], "notes": "ok"}) + ', "tool": "x", "args": {"path": "p"}}'
+    c, _ = client(reply(text))
+    assert [x.notes for x in ask_many(c)] == ["ok"]
+
+
+def test_nothing_valid_gets_the_usual_repair_attempt():
+    c, fake = client(reply("no json here"), reply(json.dumps(GOOD)))
+    assert [x.notes for x in ask_many(c)] == ["n"] and len(fake.calls) == 2

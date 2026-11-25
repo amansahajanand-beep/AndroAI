@@ -13,6 +13,7 @@ sent to whatever ``LlmClient`` is given, so callers must only use a client the u
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from collections.abc import Callable
@@ -215,7 +216,12 @@ def run_modify_job(
         proposer = AgentEditProposer(
             client,
             engine,
-            project_facts=_facts(detection, len(report.facts), bundle.conventions),
+            project_facts=_facts(
+                detection,
+                len(report.facts),
+                bundle.conventions,
+                _key_files(imported.workspace),
+            ),
             hints=(*plan_files, *impact),
             conversation=request.history,
             config=AgentConfig(max_steps=request.max_agent_steps),
@@ -305,7 +311,12 @@ def _with_strings(plan_files: tuple[str, ...], workspace: Path) -> tuple[str, ..
     return (*plan_files, *extra)
 
 
-def _facts(detection: Detection, fact_count: int, conventions: tuple[str, ...]) -> str:
+def _facts(
+    detection: Detection,
+    fact_count: int,
+    conventions: tuple[str, ...],
+    key_files: tuple[str, ...] = (),
+) -> str:
     lines = [
         (
             f"- native Android project; languages: {', '.join(detection.languages) or 'unknown'}; "
@@ -314,4 +325,38 @@ def _facts(detection: Detection, fact_count: int, conventions: tuple[str, ...]) 
         f"- the static analysis found {fact_count} facts about it",
     ]
     lines += [f"- convention: {c}" for c in conventions[:6]]
+    if key_files:
+        lines.append("- key files (paths that exist; read them rather than searching):")
+        lines += [f"    {path}" for path in key_files]
     return "\n".join(lines)
+
+
+_KEY_PATTERNS = (
+    re.compile(
+        r"(^|/)(build\.gradle(\.kts)?|settings\.gradle(\.kts)?|libs\.versions\.toml)$"
+    ),
+    re.compile(r"(^|/)AndroidManifest\.xml$"),
+    re.compile(
+        r"/res/values[^/]*/(colors|themes|styles|strings|dimens|attrs|type)\.xml$"
+    ),
+    re.compile(r"(^|/)(Color|Theme|Type|Shape|Dimens)\.kt$"),
+    re.compile(
+        r"(^|/)(MainActivity|[A-Za-z]*Application|App|[A-Za-z]*NavHost|[A-Za-z]*Navigation)\.kt$"
+    ),
+)
+_PER_GROUP = 6
+
+
+def _key_files(workspace) -> tuple[str, ...]:
+    """Where the usual suspects live (build files, manifest, theme resources), found by path only.
+
+    Saves the agent a dozen exploratory steps; it still reads what it needs.
+    """
+    groups: list[list[str]] = [[] for _ in _KEY_PATTERNS]
+    for path in workspace.iter_files():
+        if "/androidTest/" in path or "/test/" in path:
+            continue
+        for group, pattern in zip(groups, _KEY_PATTERNS, strict=True):
+            if len(group) < _PER_GROUP and pattern.search(path):
+                group.append(path)
+    return tuple(path for group in groups for path in group)

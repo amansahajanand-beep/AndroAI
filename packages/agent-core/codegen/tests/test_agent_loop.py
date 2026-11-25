@@ -328,3 +328,141 @@ def test_the_agent_is_told_how_many_steps_it_has_and_when_to_wrap_up(go):
     go(model, config=AgentConfig(max_steps=8))
     assert "Step 1 of at most 8" in model.prompts[0]
     assert "almost out of steps" in model.prompts[3]
+
+
+def test_common_argument_spellings_are_accepted(go, project):
+    model = Script(
+        {"tool": "read_file", "args": {"file_path": STRINGS}},
+        {
+            "tool": "edit_file",
+            "args": {"filepath": STRINGS, "old_string": "Nothing to do", "new_string": "Empty"},
+        },
+        {"tool": "finish", "args": {"message": "done"}},
+    )
+    result, _ = go(model)
+    assert result.outcome is ModifyOutcome.COMPLETED and "Empty" in (project / STRINGS).read_text()
+    assert result.notes == "done"
+
+
+def test_a_real_key_is_never_overwritten_by_an_alias():
+    from androai_codegen.agent.loop import normalize_args
+
+    out = normalize_args("read_file", {"path": "a.kt", "file": "b.kt"})
+    assert out["path"] == "a.kt"
+    assert normalize_args("search", {"query": "x"}) == {"pattern": "x"}
+    assert normalize_args("move_file", {"from": "a", "to": "b"}) == {"src": "a", "dst": "b"}
+
+
+def test_a_missing_argument_error_shows_the_exact_usage(go):
+    model = Script(tool("read_file"), tool("finish", summary="x"))
+    go(model)
+    assert 'Usage: read_file {"path"' in model.prompts[1]
+
+
+def test_steps_with_arguments_beside_the_tool_name_are_understood():
+    from androai_codegen.agent.loop import AgentStep
+
+    flat = AgentStep.model_validate(
+        {"tool": "read_file", "path": "a.kt", "note": "n", "start": 1, "end": 100}
+    )
+    assert flat.tool == "read_file" and flat.args == {"path": "a.kt", "start": 1, "end": 100}
+    mixed = AgentStep.model_validate({"tool": "read_file", "args": {"path": "a.kt"}, "start": 5})
+    assert mixed.args == {"path": "a.kt", "start": 5}
+    explicit = AgentStep.model_validate(
+        {"tool": "read_file", "args": {"path": "real"}, "path": "other"}
+    )
+    assert explicit.args["path"] == "real"
+    named = AgentStep.model_validate({"action": "search", "query": "x"})
+    assert named.tool == "search" and named.args == {"query": "x"}
+    assert AgentStep.model_validate({"tool": "finish", "summary": "s"}).args == {"summary": "s"}
+
+
+def test_a_flat_step_runs_end_to_end(go, project):
+    model = Script(
+        {"tool": "read_file", "path": STRINGS, "start": 1, "end": 50},
+        {"tool": "edit_file", "path": STRINGS, "old": "Nothing to do", "new": "Empty"},
+        {"tool": "finish", "summary": "ok"},
+    )
+    result, _ = go(model)
+    assert result.outcome is ModifyOutcome.COMPLETED and "Empty" in (project / STRINGS).read_text()
+
+
+class ManyScript(Script):
+    """A client that can return several steps per call, like a model that batches its reads."""
+
+    def __init__(self, *replies):
+        super().__init__()
+        self.replies = list(replies)
+
+    def complete_json(self, system, user, output, *, max_output_tokens):
+        return self.complete_json_many(system, user, output, max_output_tokens=max_output_tokens)[0]
+
+    def complete_json_many(self, system, user, output, *, max_output_tokens, limit=5):
+        self.prompts.append(user)
+        reply = self.replies.pop(0)
+        return [output.model_validate(item) for item in reply][:limit]
+
+
+def test_several_reads_in_one_reply_all_run_in_one_model_call(go):
+    model = ManyScript(
+        [
+            tool("list_dir", path=""),
+            tool("read_file", path=STRINGS),
+            tool("search", pattern="empty"),
+        ],
+        [tool("finish", summary="looked")],
+    )
+    result, _ = go(model)
+    assert len(model.prompts) == 2 and result.outcome is ModifyOutcome.NO_PROGRESS
+    second = model.prompts[1]
+    assert "[1] list_dir" in second and "[2] read_file" in second and "[3] search" in second
+
+
+def test_a_change_ends_the_batch_and_the_rest_is_dropped(go, project):
+    model = ManyScript(
+        [
+            tool("edit_file", path=STRINGS, old="Nothing to do", new="Empty"),
+            tool("read_file", path=STRINGS),  # planned before the edit: dropped
+        ],
+        [tool("finish", summary="x")],
+    )
+    result, _ = go(model)
+    assert result.outcome is ModifyOutcome.COMPLETED
+    assert "[1] edit_file" in model.prompts[1] and "[2]" not in model.prompts[1]
+
+
+def test_finish_after_other_steps_in_the_same_reply_is_ignored(go):
+    model = ManyScript(
+        [tool("read_file", path=STRINGS), tool("finish", summary="premature")],
+        [tool("finish", summary="real")],
+    )
+    result, _ = go(model)
+    assert len(model.prompts) == 2 and result.notes == "real"
+
+
+def test_the_batch_never_exceeds_the_step_budget(go):
+    reads = [tool("read_file", path=STRINGS, start=i + 1, end=i + 1) for i in range(4)]
+    model = ManyScript(reads)
+    result, proposer = go(model, config=AgentConfig(max_steps=2))
+    assert len(model.prompts) == 1  # the budget ended the run; no second model call
+    assert result.outcome is ModifyOutcome.PROVIDER_FAILURE
+    assert any("all its steps" in w for w in result.warnings)
+    assert len(proposer._run.entries) == 2  # only two of the four reads were run
+
+
+def test_failed_steps_are_announced_to_the_progress_listener(go):
+    seen = []
+    model = Script(tool("read_file", path="nope.kt"), tool("finish", summary="x"))
+    go(model, progress=seen.append)
+    assert any(t.startswith("  that step failed:") and "does not exist" in t for t in seen)
+
+
+def test_repeated_edits_to_one_file_trigger_a_nudge(go, project):
+    edits = [
+        tool("edit_file", path=STRINGS, old=old, new=new)
+        for old, new in (("Nothing to do", "A"), ("A", "B"), ("B", "C"))
+    ]
+    model = Script(*edits, tool("finish", summary="x"))
+    go(model)
+    assert "already edited" not in model.prompts[2]
+    assert "already edited" in model.prompts[3] and "(3 times)" in model.prompts[3]

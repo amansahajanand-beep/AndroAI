@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from androai_codegen.editing import PatchEngine
 from androai_codegen.modify import ProposalRequest, ProposedEdit, ProposedEdits
@@ -79,10 +79,16 @@ Reply with ONE JSON object per step and nothing else:
     + TOOL_HELP
 )
 
+READ_ONLY = ("list_dir", "read_file", "search")
+MAX_STEPS_PER_REPLY = 4
+
 _TOOLS = (
     "list_dir read_file search edit_file write_file delete_file move_file rename_package "
     "set_application_id ask_user finish"
 ).split()
+
+
+_STEP_KEYS = frozenset({"tool", "args", "note", "thought", "reasoning", "reason", "label", "id"})
 
 
 class AgentStep(BaseModel):
@@ -91,6 +97,22 @@ class AgentStep(BaseModel):
     tool: str = Field(min_length=1, max_length=40)
     args: dict[str, Any] = Field(default_factory=dict)
     note: str = Field(default="", max_length=300)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _tolerate_common_shapes(cls, data: Any) -> Any:
+        """Models often put the arguments beside "tool" instead of inside "args", or call the tool
+        "action" or "name". Accept those shapes; an explicit "args" value always wins."""
+        if not isinstance(data, dict):
+            return data
+        tool = data.get("tool") or data.get("action") or data.get("name") or data.get("function")
+        args = dict(data["args"]) if isinstance(data.get("args"), dict) else {}
+        skipped = _STEP_KEYS | {"action", "name", "function"} if "tool" not in data else _STEP_KEYS
+        for key, value in data.items():
+            if key not in skipped:
+                args.setdefault(key, value)
+        note = data.get("note") or data.get("reason") or data.get("thought") or ""
+        return {"tool": tool, "args": args, "note": str(note)[:300]}
 
 
 class AgentConfig(BaseModel):
@@ -187,8 +209,9 @@ class AgentEditProposer:
 
     def _loop(self, run: _Run, budget: int) -> None:
         failures: dict[str, int] = {}
-        self._step_limit = run.steps + budget
-        for _ in range(budget):
+        end = run.steps + budget
+        self._step_limit = end
+        while run.steps < end:
             if time.monotonic() - self._started > self.cfg.max_seconds:
                 if self.staged.changes():
                     run.done = True
@@ -198,47 +221,17 @@ class AgentEditProposer:
                     )
                     return
                 raise AgentStopped("the assistant ran out of time before finishing")
-            step = self.client.complete_json(
-                AGENT_RULES,
-                self._prompt(run),
-                AgentStep,
-                max_output_tokens=self.cfg.max_output_tokens,
-            )
-            run.steps += 1
-            if step.tool not in _TOOLS:
-                self._record(
-                    run, step, f"unknown tool '{step.tool}'. Use one of: {', '.join(_TOOLS)}", False
-                )
-                continue
-            if step.tool == "finish":
-                run.done, run.summary = True, str(step.args.get("summary") or step.note or "Done.")
-                return
-            if step.tool == "ask_user":
-                question = str(step.args.get("question") or step.note).strip()
-                if not question:
-                    self._record(run, step, "ask_user needs a 'question'", False)
-                    continue
-                run.question = question
-                return
-            self._say(step)
-            key = step.tool + json.dumps(step.args, sort_keys=True, default=str)
-            try:
-                result, ok = self._execute(step), True
-            except ToolError as exc:
-                result, ok = f"error: {exc}", False
-            except (TypeError, ValueError) as exc:
-                result, ok = f"error: bad arguments ({exc})", False
-            if ok:
-                failures.pop(key, None)
-                if step.tool in ("edit_file", "write_file", "delete_file", "move_file"):
-                    path = str(step.args.get("path") or step.args.get("dst") or "")
-                    if path and step.note:
-                        run.why[path] = step.note
-            else:
-                failures[key] = failures.get(key, 0) + 1
-                if failures[key] >= self.cfg.stuck_after:
-                    raise AgentStopped("the assistant got stuck repeating a failing step")
-            self._record(run, step, result, ok)
+            for index, step in enumerate(self._next_steps(run)):
+                if run.steps >= end:
+                    break
+                if index > 0 and step.tool in ("finish", "ask_user"):
+                    break  # the model has not seen the results of the steps before it yet
+                run.steps += 1
+                verdict = self._handle(run, step, failures)
+                if verdict == "stop":
+                    return
+                if verdict == "change":
+                    break  # later steps in this reply were planned before this change
         if self.staged.changes():
             run.done = True
             run.summary = (
@@ -250,6 +243,67 @@ class AgentEditProposer:
         raise AgentStopped(
             "the assistant used all its steps without finishing; try a narrower request"
         )
+
+    def _next_steps(self, run: _Run) -> list[AgentStep]:
+        """One model call. Several read-only steps in one reply are all kept when the client can."""
+        prompt = self._prompt(run)
+        many = getattr(self.client, "complete_json_many", None)
+        if many is not None:
+            return list(
+                many(
+                    AGENT_RULES,
+                    prompt,
+                    AgentStep,
+                    max_output_tokens=self.cfg.max_output_tokens,
+                    limit=MAX_STEPS_PER_REPLY,
+                )
+            )
+        return [
+            self.client.complete_json(
+                AGENT_RULES, prompt, AgentStep, max_output_tokens=self.cfg.max_output_tokens
+            )
+        ]
+
+    def _handle(self, run: _Run, step: AgentStep, failures: dict[str, int]) -> str | None:
+        """Run one step. "stop" ends the run; "change" means the staged files were modified."""
+        step = step.model_copy(update={"args": normalize_args(step.tool, step.args)})
+        if step.tool not in _TOOLS:
+            self._record(
+                run, step, f"unknown tool '{step.tool}'. Use one of: {', '.join(_TOOLS)}", False
+            )
+            return None
+        if step.tool == "finish":
+            run.done, run.summary = True, str(step.args.get("summary") or step.note or "Done.")
+            return "stop"
+        if step.tool == "ask_user":
+            question = str(step.args.get("question") or step.note).strip()
+            if not question:
+                self._record(run, step, "ask_user needs a 'question'", False)
+                return None
+            run.question = question
+            return "stop"
+        self._say(step)
+        key = step.tool + json.dumps(step.args, sort_keys=True, default=str)
+        try:
+            result, ok = self._execute(step), True
+        except ToolError as exc:
+            result, ok = f"error: {exc}{_usage_hint(step)}", False
+        except (TypeError, ValueError) as exc:
+            result, ok = f"error: bad arguments ({exc})", False
+        if ok:
+            failures.pop(key, None)
+            if step.tool in ("edit_file", "write_file", "delete_file", "move_file"):
+                path = str(step.args.get("path") or step.args.get("dst") or "")
+                if path and step.note:
+                    run.why[path] = step.note
+        else:
+            failures[key] = failures.get(key, 0) + 1
+            if failures[key] >= self.cfg.stuck_after:
+                raise AgentStopped("the assistant got stuck repeating a failing step")
+        if not ok:
+            self._tell(f"  that step failed: {result[:140]}")
+        self._record(run, step, result, ok)
+        return None if step.tool in READ_ONLY else "change"
 
     def _execute(self, step: AgentStep) -> str:
         a, s = step.args, self.staged
@@ -302,6 +356,9 @@ class AgentEditProposer:
                 + untrusted("review", "\n".join(run.feedback))
             )
         parts.append(self._history(run))
+        repeated = self._repeated_edits(run)
+        if repeated:
+            parts.append(repeated)
         parts.append("Staged so far: " + self.staged.summary())
         left = self._step_limit - run.steps
         pace = f"Step {run.steps + 1} of at most {self._step_limit}."
@@ -312,6 +369,26 @@ class AgentEditProposer:
         parts.append(pace)
         parts.append("Reply with the JSON for your next step.")
         return "\n\n".join(parts)
+
+    def _repeated_edits(self, run: _Run) -> str:
+        """A nudge when the agent keeps editing the same file instead of moving on."""
+        counts: dict[str, int] = {}
+        for entry in run.entries:
+            if entry.tool in ("edit_file", "write_file"):
+                try:
+                    path = str(json.loads(entry.args).get("path", ""))
+                except ValueError:
+                    continue
+                if path:
+                    counts[path] = counts.get(path, 0) + 1
+        busy = [f"{path} ({n} times)" for path, n in counts.items() if n >= 3]
+        if not busy:
+            return ""
+        return (
+            "Warning: you have already edited " + ", ".join(busy) + ". Stop re-editing it: read it "
+            "once to confirm the result, then move on to the other parts of the request or call "
+            "finish."
+        )
 
     def _history(self, run: _Run) -> str:
         if not run.entries:
@@ -332,6 +409,11 @@ class AgentEditProposer:
                 lines.pop(0)
                 text = "(earlier steps omitted)\n" + "\n".join(lines)
         return "Steps so far:\n" + text
+
+    def _tell(self, text: str) -> None:
+        if self.progress is not None:
+            with contextlib.suppress(Exception):  # a broken listener must never stop the agent
+                self.progress(text[:200])
 
     def _say(self, step: AgentStep) -> None:
         if self.progress is None:
@@ -367,6 +449,81 @@ class AgentEditProposer:
         )
         base = {c.path: c.base_checksum for c in changes if c.base_checksum}
         return ProposedEdits(edits=edits, notes=run.summary[:1500], base_checksums=base)
+
+
+# Models name arguments differently ("file_path", "old_string", ...). Accept the common spellings
+# so a sensible call is not refused over a key name.
+_ALIASES: dict[str, tuple[str, ...]] = {
+    "path": (
+        "file_path",
+        "filepath",
+        "file",
+        "filename",
+        "file_name",
+        "target",
+        "name",
+        "dir",
+        "directory",
+        "folder",
+        "path_name",
+    ),
+    "old": ("old_string", "old_text", "oldtext", "oldstring", "search", "find", "original", "from"),
+    "new": ("new_string", "new_text", "newtext", "newstring", "replace", "replacement", "to"),
+    "content": ("contents", "text", "body", "data", "new_content", "file_content"),
+    "pattern": ("query", "regex", "text", "search", "term", "q", "keyword"),
+    "src": ("source", "from", "from_path", "old_path", "src_path"),
+    "dst": ("destination", "dest", "to", "to_path", "new_path", "dst_path", "target"),
+    "question": ("message", "prompt", "text", "ask"),
+    "summary": ("message", "result", "text", "description", "notes"),
+    "application_id": ("applicationid", "app_id", "id", "new", "new_id", "package"),
+    "start": ("start_line", "from_line", "line_start", "offset"),
+    "end": ("end_line", "to_line", "line_end"),
+    "edits": ("changes", "replacements", "patches"),
+}
+_NEEDS: dict[str, tuple[str, ...]] = {
+    "list_dir": ("path",),
+    "read_file": ("path", "start", "end"),
+    "search": ("pattern",),
+    "edit_file": ("path", "old", "new", "edits"),
+    "write_file": ("path", "content"),
+    "delete_file": ("path",),
+    "move_file": ("src", "dst"),
+    "rename_package": ("old", "new"),
+    "set_application_id": ("application_id",),
+    "ask_user": ("question",),
+    "finish": ("summary",),
+}
+_USAGE = {
+    "list_dir": '{"path": "app/src"}',
+    "read_file": '{"path": "app/src/main/AndroidManifest.xml"}',
+    "search": '{"pattern": "text to find"}',
+    "edit_file": '{"path": "...", "old": "exact text", "new": "replacement"}',
+    "write_file": '{"path": "...", "content": "..."}',
+    "delete_file": '{"path": "..."}',
+    "move_file": '{"src": "...", "dst": "..."}',
+    "rename_package": '{"old": "com.old.app", "new": "com.new.app"}',
+    "set_application_id": '{"application_id": "com.new.app"}',
+    "ask_user": '{"question": "..."}',
+    "finish": '{"summary": "..."}',
+}
+
+
+def normalize_args(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Map common alternative argument names onto the real ones; never overwrite a real one."""
+    out = dict(args)
+    for canonical in _NEEDS.get(tool, ()):
+        if canonical in out:
+            continue
+        for alias in _ALIASES.get(canonical, ()):
+            if alias in out and alias not in _NEEDS.get(tool, ()):
+                out[canonical] = out.pop(alias)
+                break
+    return out
+
+
+def _usage_hint(step: AgentStep) -> str:
+    usage = _USAGE.get(step.tool)
+    return f". Usage: {step.tool} {usage}" if usage else ""
 
 
 def _int(value: object) -> int | None:

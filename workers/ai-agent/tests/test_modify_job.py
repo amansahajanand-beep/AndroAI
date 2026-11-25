@@ -323,3 +323,20 @@ def test_cli_defaults_to_agent_mode(tmp_path, todo_zip, capsys):
         client=client,
     )
     assert code == 0 and "status: completed" in capsys.readouterr().out
+
+
+def test_the_agent_is_given_a_map_of_the_usual_key_files(tmp_path, todo_zip):
+    client = FakeClient(step("finish", summary="nothing"))
+    run_modify_job(agent_request(tmp_path, todo_zip, "change the colors"), client)
+    first = client.prompts[0]
+    assert "key files" in first
+    for expected in (
+        "colors.xml",
+        "themes.xml",
+        "strings.xml",
+        "Color.kt",
+        "Theme.kt",
+        "AndroidManifest.xml",
+    ):
+        assert expected in first, expected
+    assert "ExampleUnitTest" not in first  # test sources are not key files
