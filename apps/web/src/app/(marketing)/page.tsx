@@ -127,23 +127,23 @@ export default function LandingPage() {
         <section className="dash-hero relative isolate -mt-[4.5rem] overflow-hidden text-white">
 
           <div className={`${CONTAINER} pb-40 pt-36 text-center md:pb-56 md:pt-48`}>
-            <p className="animate-fade-up">
+            <p>
               <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-[14px] font-medium text-white/90 backdrop-blur">
                 <Sparkles className="size-3.5" aria-hidden /> AppPilot AI for Android teams
               </span>
             </p>
-            <h1 className="mt-8 animate-fade-up text-balance font-display text-[clamp(3rem,10vw,8.5rem)] font-semibold leading-[0.95] tracking-[-0.045em] [animation-delay:100ms]">
+            <h1 className="mt-8 text-balance font-display text-[clamp(3rem,10vw,8.5rem)] font-semibold leading-[0.95] tracking-[-0.045em]">
               Every build,{" "}
               <span className="whitespace-nowrap">
                 piloted
                 <PilotGlyph className="ml-[0.08em] inline-block size-[0.72em] align-[-0.02em]" />
               </span>
             </h1>
-            <p className="mx-auto mt-9 max-w-2xl animate-fade-up text-pretty text-[17px] font-medium leading-relaxed text-white/85 [animation-delay:250ms] md:text-xl">
+            <p className="mx-auto mt-9 max-w-2xl text-pretty text-[17px] font-medium leading-relaxed text-white/85 md:text-xl">
               Describe an app, upload an Android Studio project or inspect an APK. AppPilot&apos;s agents plan, write, build,
               test and repair, and every edit waits for your review in a full browser IDE.
             </p>
-            <div className="mt-11 flex animate-fade-up flex-wrap items-center justify-center gap-3 [animation-delay:400ms]">
+            <div className="mt-11 flex flex-wrap items-center justify-center gap-3">
               <OpenAppButton size="lg" />
               <StartProjectButton />
             </div>
@@ -155,7 +155,7 @@ export default function LandingPage() {
       <main>
         <section className="relative isolate -mt-28 md:-mt-40">
           <div className={`${CONTAINER} pb-16 md:pb-24`}>
-            <div className="relative animate-fade-up [animation-delay:500ms]">
+            <div className="relative">
               <HeroIllustration />
             </div>
           </div>

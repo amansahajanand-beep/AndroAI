@@ -185,7 +185,7 @@ export function PlansDialog({ open, onOpenChange }: { open: boolean; onOpenChang
           ) : list.length === 0 ? (
             <p className="py-12 text-center text-[14px] text-muted-foreground">No plans are available right now.</p>
           ) : (
-            <div className={cn("stagger grid gap-4", list.length > 1 && "md:grid-cols-2", list.length > 2 && "lg:grid-cols-3")}>
+            <div className={cn("grid gap-4", list.length > 1 && "md:grid-cols-2", list.length > 2 && "lg:grid-cols-3")}>
               {list.map((p, i) => (
                 <PlanCard
                   key={p.id}

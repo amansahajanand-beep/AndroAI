@@ -45,12 +45,12 @@ function PromptHero({ firstName }: { firstName?: string }) {
     <section aria-label="Start a new app" className="dash-hero relative flex min-h-[calc(100dvh-3.5rem)] flex-col justify-center px-4 pb-24 pt-16 text-center sm:px-6 md:min-h-[calc(100dvh-1rem)]">
       {/* The hero is dark in both themes, so the prompt box always uses the dark tokens. */}
       <div className="dark">
-        <h1 className="mx-auto max-w-3xl animate-fade-up text-balance text-[clamp(1.875rem,4vw,2.75rem)] font-semibold leading-[1.1] tracking-[-0.035em] text-(--hero-fg)">
+        <h1 className="mx-auto max-w-3xl text-balance text-[clamp(1.875rem,4vw,2.75rem)] font-semibold leading-[1.1] tracking-[-0.035em] text-(--hero-fg)">
           What will you build today{firstName ? `, ${firstName}` : ""}?
         </h1>
 
         <form
-          className="float-panel mx-auto mt-8 max-w-[720px] animate-fade-up rounded-3xl border border-border bg-card p-3 text-left transition-colors focus-within:border-border-strong sm:p-4 [animation-delay:80ms]"
+          className="float-panel mx-auto mt-8 max-w-[720px] rounded-3xl border border-border bg-card p-3 text-left transition-colors focus-within:border-border-strong sm:p-4"
           onSubmit={(e) => {
             e.preventDefault();
             submit();

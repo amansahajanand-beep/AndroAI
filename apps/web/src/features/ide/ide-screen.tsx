@@ -49,7 +49,6 @@ import { cn } from "@/lib/utils";
 import { useEditorSettings } from "@/stores/editor-settings";
 import { isReviewTab, useDirtyPaths, useIdeStore } from "@/stores/ide-store";
 import { ApkAnalysisNotice, PROJECT_SECTIONS } from "../projects/project-frame";
-import { ProjectTechBadges } from "../projects/project-meta";
 import { AssistantPanel } from "./assistant-panel";
 import { BottomPanel } from "./bottom-panel";
 import { EditorArea } from "./editor-area";
@@ -413,7 +412,6 @@ export function IdeScreen({ projectId }: { projectId: string }) {
           {project.data ? (
             <>
               <h1 className="truncate text-[14px] font-semibold tracking-tight">{project.data.name}</h1>
-              <span className="hidden lg:block"><ProjectTechBadges project={project.data} /></span>
             </>
           ) : (
             <Skeleton className="h-4 w-32" />

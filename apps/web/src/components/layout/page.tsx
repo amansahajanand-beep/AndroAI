@@ -13,7 +13,7 @@ export function PageHeader({
   className?: string;
 }) {
   return (
-    <div className={cn("flex flex-wrap items-end justify-between gap-4 pb-8 animate-fade-up", className)}>
+    <div className={cn("flex flex-wrap items-end justify-between gap-4 pb-8", className)}>
       <div className="min-w-0">
         <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.025em] sm:text-[32px]">{title}</h1>
         {description ? <p className="mt-2 max-w-prose text-[15px] leading-relaxed text-muted-foreground">{description}</p> : null}

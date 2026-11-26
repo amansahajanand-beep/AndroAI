@@ -32,7 +32,7 @@ import { ConfirmDialog, ContextMenu, ContextMenuContent, ContextMenuItem, Contex
 import { Input } from "@/components/ui/primitives";
 import { errorMessage } from "@/lib/api/errors";
 import { useFileMutations, useFileSearch, useFileTree } from "@/lib/api/hooks";
-import { cn, dirname } from "@/lib/utils";
+import { basename, cn, dirname } from "@/lib/utils";
 import { useDirtyPaths, useIdeStore } from "@/stores/ide-store";
 
 const GIT_MARK: Record<GitFileStatus, { letter: string; className: string; label: string }> = {
@@ -140,6 +140,9 @@ function DraftInput({ initial, depth, icon, onSubmit, onCancel }: { initial: str
   );
 }
 
+/** Drag payload type for moving files and folders inside the explorer (ignores OS file drops and text). */
+const DRAG_MIME = "application/x-apppilot-path";
+
 export interface FileExplorerHandle {
   focusSearch: (mode?: "names" | "content") => void;
 }
@@ -179,6 +182,70 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
   const needle = mode === "names" ? query.trim().toLowerCase() : "";
   const nodes = useMemo(() => filterTree(tree.data ?? [], needle), [tree.data, needle]);
   const marks = useMemo(() => folderMarks(tree.data ?? []), [tree.data]);
+
+  /* ---------- Drag and drop: move files and folders ---------- */
+  const [dragging, setDragging] = useState<string | null>(null);
+  /** Folder the dragged item would land in; "" is the project root, null means no valid target. */
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const hoverExpand = useRef<{ path: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const allPaths = useMemo(() => {
+    const set = new Set<string>();
+    const walk = (list: FileNode[]) => list.forEach((n) => { set.add(n.path); if (n.children) walk(n.children); });
+    walk(tree.data ?? []);
+    return set;
+  }, [tree.data]);
+  const canDrag = !readOnly && !draft;
+  /** Not where it already is, and never into itself or one of its own subfolders. */
+  const isValidTarget = (from: string, toDir: string) => dirname(from) !== toDir && toDir !== from && !toDir.startsWith(`${from}/`);
+  const clearHoverExpand = () => {
+    if (hoverExpand.current) clearTimeout(hoverExpand.current.timer);
+    hoverExpand.current = null;
+  };
+  const endDrag = () => {
+    setDragging(null);
+    setDropTarget(null);
+    clearHoverExpand();
+  };
+  const moveInto = (from: string, toDir: string) => {
+    if (!isValidTarget(from, toDir)) return;
+    const name = basename(from);
+    const to = toDir ? `${toDir}/${name}` : name;
+    const where = toDir || "the project root";
+    if (allPaths.has(to)) {
+      toast.error(`${name} already exists in ${where}.`);
+      return;
+    }
+    move.mutate(
+      { from, to },
+      {
+        onSuccess: () => {
+          renamePath(projectId, from, to); // keeps open tabs and unsaved edits pointing at the new path
+          if (toDir) setExpanded((s) => new Set([...s, toDir]));
+          toast.success(`Moved ${name} to ${where}`);
+        },
+        onError: (e) => toast.error(errorMessage(e)),
+      },
+    );
+  };
+  /** Handles dragover for a target folder. Returns true when a drop would be accepted. */
+  const dragOverFolder = (e: React.DragEvent, toDir: string) => {
+    if (!dragging || !e.dataTransfer.types.includes(DRAG_MIME)) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    const ok = isValidTarget(dragging, toDir);
+    e.dataTransfer.dropEffect = ok ? "move" : "none";
+    setDropTarget(ok ? toDir : null);
+    return ok;
+  };
+  const dropOnFolder = (e: React.DragEvent, toDir: string) => {
+    if (!e.dataTransfer.types.includes(DRAG_MIME)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const from = e.dataTransfer.getData(DRAG_MIME) || dragging;
+    endDrag();
+    if (from) moveInto(from, toDir);
+  };
+  useEffect(() => clearHoverExpand, []);
 
   const toggle = (p: string) =>
     setExpanded((s) => {
@@ -239,7 +306,24 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
         const isDirty = dirty.has(n.path);
         const Kind = fileKind(n.name);
         return (
-          <li key={n.path} role="treeitem" aria-expanded={isDir ? open : undefined} aria-selected={active === n.path}>
+          <li
+            key={n.path}
+            role="treeitem"
+            aria-expanded={isDir ? open : undefined}
+            aria-selected={active === n.path}
+            draggable={canDrag}
+            onDragStart={(e) => {
+              e.stopPropagation();
+              if (!canDrag) return e.preventDefault();
+              e.dataTransfer.setData(DRAG_MIME, n.path);
+              e.dataTransfer.effectAllowed = "move";
+              // Drag image: just this row, not the whole expanded subtree.
+              const row = (e.currentTarget as HTMLElement).querySelector("button");
+              if (row) e.dataTransfer.setDragImage(row, 16, 14);
+              setDragging(n.path);
+            }}
+            onDragEnd={endDrag}
+          >
             <ContextMenu>
               <ContextMenuTrigger asChild>
                 <button
@@ -247,9 +331,22 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
                     "group mx-1.5 flex h-7 w-[calc(100%-0.75rem)] items-center gap-1.5 rounded-md pr-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-surface-3/70 hover:text-foreground focus-visible:outline-offset-[-2px]",
                     active === n.path &&
                       "relative bg-surface-3 text-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-primary",
+                    dragging === n.path && "opacity-50",
+                    isDir && dropTarget === n.path && "bg-primary-soft text-foreground ring-1 ring-inset ring-primary/40",
                   )}
                   style={{ paddingLeft: 8 + depth * 12 }}
                   onClick={() => (isDir ? toggle(n.path) : openFile(projectId, n.path))}
+                  onDragOver={(e) => {
+                    // Dropping on a file means "next to it", i.e. into that file's folder.
+                    const ok = dragOverFolder(e, isDir ? n.path : dirname(n.path));
+                    if (ok && isDir && !open) {
+                      if (hoverExpand.current?.path !== n.path) {
+                        clearHoverExpand();
+                        hoverExpand.current = { path: n.path, timer: setTimeout(() => setExpanded((s) => new Set([...s, n.path])), 650) };
+                      }
+                    } else if (hoverExpand.current && hoverExpand.current.path !== n.path) clearHoverExpand();
+                  }}
+                  onDrop={(e) => dropOnFolder(e, isDir ? n.path : dirname(n.path))}
                   title={n.path}
                 >
                   {isDir ? (
@@ -387,7 +484,18 @@ export const FileExplorer = forwardRef<FileExplorerHandle, { projectId: string; 
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto py-1">
+      <div
+        className={cn("min-h-0 flex-1 overflow-y-auto py-1 transition-colors", dropTarget === "" && "bg-primary-soft/50 ring-1 ring-inset ring-primary/30")}
+        // Empty space in the tree is the project root: drop here to move something out of its folder.
+        onDragOver={(e) => dragOverFolder(e, "")}
+        onDrop={(e) => dropOnFolder(e, "")}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+            setDropTarget(null);
+            clearHoverExpand();
+          }
+        }}
+      >
         {mode === "content" && query.trim().length >= 2 ? (
           content.isPending ? <LoadingRows rows={3} /> : content.isError ? <ErrorState error={content.error} compact /> : grouped.length === 0 ? (
             <EmptyState compact title="No matches" />

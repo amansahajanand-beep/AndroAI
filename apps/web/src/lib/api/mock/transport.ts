@@ -455,6 +455,8 @@ const handlers: Partial<Record<EndpointKey, Handler>> = {
   "projects.files.move": (r) => {
     const b = r.body as MoveFileRequest;
     const files = projectFiles(r.params.projectId!);
+    if (b.to === b.from || b.to.startsWith(`${b.from}/`)) fail(409, "file.invalid_move", "A folder can't be moved into itself.");
+    if ([...files.keys()].some((p) => p === b.to || p.startsWith(`${b.to}/`))) fail(409, "file.exists", `${b.to} already exists.`);
     let moved = 0;
     for (const [p, f] of [...files]) {
       if (p === b.from || p.startsWith(`${b.from}/`)) {

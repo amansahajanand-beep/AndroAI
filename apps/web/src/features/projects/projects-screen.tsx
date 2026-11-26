@@ -592,7 +592,7 @@ export function ProjectsScreen() {
               <p className="py-10 text-center text-[14px] text-muted-foreground">Every project is in a folder.</p>
             )
           ) : view === "grid" ? (
-            <div className="stagger grid gap-x-5 gap-y-7 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+            <div className="grid gap-x-5 gap-y-7 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
               {visible.map((p, i) => (
                 <ProjectCard
                   key={p.id}

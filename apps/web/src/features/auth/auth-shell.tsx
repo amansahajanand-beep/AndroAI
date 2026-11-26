@@ -21,7 +21,7 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
         <main className="flex flex-1 items-center justify-center px-5 pb-16 pt-4 sm:px-8">
-          <div className="w-full max-w-[25rem] animate-fade-up">{children}</div>
+          <div className="w-full max-w-[25rem]">{children}</div>
         </main>
       </div>
       <AuthBrandPanel />
