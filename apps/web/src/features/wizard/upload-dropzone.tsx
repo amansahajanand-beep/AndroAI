@@ -59,7 +59,7 @@ export function UploadDropzone({
         }}
         className={cn(
           "flex w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed px-6 py-10 text-center transition-colors disabled:opacity-50",
-          over ? "border-primary bg-primary-soft" : "border-border-strong hover:bg-surface-2",
+          over ? "border-foreground/40 bg-surface-2" : "border-border-strong hover:bg-surface-2",
         )}
       >
         <UploadCloud className="size-6 text-muted-foreground" aria-hidden />

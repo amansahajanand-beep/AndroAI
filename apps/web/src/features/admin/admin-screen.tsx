@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { WorkerStatus } from "@apppilot/contracts";
 import { Search } from "lucide-react";
 import { PageBody, PageHeader, SectionTitle } from "@/components/layout/page";
-import { ErrorState, QueryView } from "@/components/states/states";
+import { EmptyState, ErrorState, QueryView } from "@/components/states/states";
 import { Badge, Card, Input, Skeleton, Table, TBody, TD, TH, THead, TR } from "@/components/ui/primitives";
 import { useAdminAudit, useAdminOverview, useAdminUsers, useAdminWorkers } from "@/lib/api/hooks";
 import { formatNumber, formatRelative, formatUsd } from "@/lib/utils";
@@ -47,11 +47,11 @@ export function AdminScreen() {
       {overview.isError ? (
         <ErrorState error={overview.error} onRetry={() => overview.refetch()} />
       ) : (
-        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border md:grid-cols-4">
+        <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
           {(o ? stats : Array.from({ length: 8 }, (_, i) => [String(i), null] as [string, null])).map(([k, v]) => (
-            <div key={k} className="bg-card px-5 py-3.5">
-              {o ? <dt className="text-[13px] text-muted-foreground">{k}</dt> : <Skeleton className="h-3 w-20" />}
-              <dd className="mt-1 text-xl font-semibold tabular-nums">{o ? v : <Skeleton className="h-6 w-14" />}</dd>
+            <div key={k} className="rounded-lg border border-border bg-card px-4 py-3">
+              {o ? <dt className="truncate text-[12.5px] text-muted-foreground">{k}</dt> : <Skeleton className="h-3 w-20" />}
+              <dd className="mt-1 text-[20px] font-semibold tabular-nums tracking-tight">{o ? v : <Skeleton className="h-6 w-14" />}</dd>
             </div>
           ))}
         </dl>
@@ -60,9 +60,9 @@ export function AdminScreen() {
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <section className="min-w-0">
           <SectionTitle action={
-            <div className="relative w-56">
-              <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-subtle-foreground" aria-hidden />
-              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search users" aria-label="Search users" className="h-7 pl-7 text-[13px]" />
+            <div className="relative w-40 sm:w-56">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-subtle-foreground" aria-hidden />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search users" aria-label="Search users" className="h-8 pl-8 text-[13px]" />
             </div>
           }>Users</SectionTitle>
           <Card>
@@ -80,6 +80,13 @@ export function AdminScreen() {
                         <TD className="hidden text-muted-foreground md:table-cell">{formatRelative(u.lastActiveAt)}</TD>
                       </TR>
                     ))}
+                    {filteredUsers.length === 0 ? (
+                      <TR>
+                        <TD colSpan={5} className="py-8 text-center text-[14px] text-muted-foreground">
+                          {q.trim() ? `No users match “${q.trim()}”.` : "No users yet."}
+                        </TD>
+                      </TR>
+                    ) : null}
                   </TBody>
                 </Table>
               )}
@@ -110,7 +117,7 @@ export function AdminScreen() {
           <section>
             <SectionTitle>Audit log</SectionTitle>
             <Card>
-              <QueryView query={audit} compact isEmpty={(d) => d.length === 0}>
+              <QueryView query={audit} compact isEmpty={(d) => d.length === 0} empty={<EmptyState compact title="No audit events yet">Admin actions are recorded here.</EmptyState>}>
                 {(list) => (
                   <ul className="divide-y divide-border">
                     {list.map((a) => (

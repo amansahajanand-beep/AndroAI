@@ -13,7 +13,7 @@ export function PageHeader({
   className?: string;
 }) {
   return (
-    <div className={cn("flex flex-wrap items-end justify-between gap-4 pb-8 animate-fade-up", className)}>
+    <div className={cn("flex flex-wrap items-end justify-between gap-4 pb-8", className)}>
       <div className="min-w-0">
         <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.025em] sm:text-[32px]">{title}</h1>
         {description ? <p className="mt-2 max-w-prose text-[15px] leading-relaxed text-muted-foreground">{description}</p> : null}
@@ -23,16 +23,20 @@ export function PageHeader({
   );
 }
 
+/**
+ * The page column: fixed gutters on phones/tablets, then centred and capped at 1280px so tables and
+ * forms never stretch edge to edge on wide screens. Narrow pages (forms) add their own max-w-*.
+ */
+export const PAGE_COLUMN = "mx-auto w-full px-4 sm:px-6 lg:w-[min(92%,1280px)] lg:px-0";
+
 export function PageBody({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  // Desktop (lg+): 5% / 90% / 5% of the content area, with the 90% column
-  // capped at 1600px and centred. Smaller breakpoints keep fixed gutters.
-  return <div className={cn("mx-auto w-full px-4 py-8 sm:px-6 lg:w-[min(90%,1600px)] lg:px-0", className)} {...props} />;
+  return <div className={cn(PAGE_COLUMN, "py-8", className)} {...props} />;
 }
 
 export function SectionTitle({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-center justify-between gap-2">
-      <h2 className="font-display text-[16px] font-semibold tracking-tight">{children}</h2>
+      <h2 className="text-[16px] font-semibold tracking-tight">{children}</h2>
       {action}
     </div>
   );
@@ -51,7 +55,7 @@ export function Meter({
   format?: (n: number) => string;
 }) {
   const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : null;
-  const tone = pct == null ? "bg-brand" : pct >= 90 ? "bg-destructive" : pct >= 75 ? "bg-warning" : "bg-brand";
+  const tone = pct == null ? "bg-primary" : pct >= 90 ? "bg-destructive" : pct >= 75 ? "bg-warning" : "bg-primary";
   return (
     <div className="grid gap-1.5">
       <div className="flex items-baseline justify-between gap-2 text-[14px]">

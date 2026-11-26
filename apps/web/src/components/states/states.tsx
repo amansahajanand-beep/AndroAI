@@ -32,11 +32,8 @@ function StateFrame({
         className,
       )}
     >
-      <div className="relative mb-1 grid size-12 place-items-center rounded-2xl border border-border-strong bg-surface-2 text-muted-foreground shadow-card [&_svg]:size-5">
-        <span aria-hidden className="absolute inset-0 -z-10 rounded-2xl bg-brand opacity-20 blur-xl" />
-        {icon}
-      </div>
-      <p className="font-display text-[16px] font-semibold tracking-tight">{title}</p>
+      <div className="mb-1 grid size-11 place-items-center rounded-xl border border-border bg-surface-2 text-muted-foreground [&_svg]:size-5">{icon}</div>
+      <p className="text-[15px] font-semibold tracking-tight">{title}</p>
       {children ? <div className="max-w-sm text-[14px] leading-relaxed text-muted-foreground">{children}</div> : null}
       {action ? <div className="mt-2">{action}</div> : null}
     </div>

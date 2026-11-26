@@ -7,6 +7,7 @@ import { PendingBackend } from "@/components/states/states";
 import { isPendingBackend, isUnauthorized } from "@/lib/api/errors";
 import { useSession } from "@/lib/api/hooks";
 import { ErrorState } from "@/components/states/states";
+import { Skeleton } from "@/components/ui/primitives";
 
 /**
  * Client-side session gate for the signed-in app. The backend remains the
@@ -23,9 +24,21 @@ export function AuthGuard({ children, requireAdmin }: { children: React.ReactNod
   }, [unauthorized, pathname, router]);
 
   if (session.isPending || unauthorized) {
+    // A quiet outline of the app (sidebar + page) while the session is checked, instead of a blank screen.
     return (
-      <div className="grid h-dvh place-items-center" aria-busy="true">
-        <LogoMark className="size-8 animate-pulse text-muted-foreground" />
+      <div className="flex h-dvh bg-background" aria-busy="true" aria-label="Loading">
+        <div className="dark hidden w-[256px] shrink-0 flex-col gap-2 bg-(--sidebar-bg) px-3 py-4 md:flex">
+          <LogoMark className="mb-3 size-6 rounded-[7px]" />
+          <Skeleton className="h-10 rounded-xl" />
+          <Skeleton className="mt-2 h-8 rounded-lg" />
+          <Skeleton className="h-8 w-4/5 rounded-lg" />
+          <Skeleton className="h-8 w-3/5 rounded-lg" />
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-4 px-6 py-10 md:px-12">
+          <Skeleton className="h-7 w-48" />
+          <Skeleton className="h-4 w-72 max-w-full" />
+          <Skeleton className="mt-4 h-48 rounded-xl" />
+        </div>
       </div>
     );
   }

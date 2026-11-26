@@ -25,7 +25,7 @@ import type {
 } from "@apppilot/contracts";
 import { TERMINAL_AGENT_STATUSES } from "@apppilot/contracts";
 import { api } from "./client";
-import { isPendingBackend } from "./errors";
+import { isPendingBackend, isUnauthorized } from "./errors";
 
 export const qk = {
   session: ["session"] as const,
@@ -92,7 +92,13 @@ export function useLogout() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.auth.logout,
-    onSettled: () => qc.clear(),
+    // Drop everything cached for this user once the session is really over: after a successful
+    // logout, or when the server says there was no session left (401). A failed request (network
+    // down) keeps the user signed in, so their data stays.
+    onSuccess: () => qc.clear(),
+    onError: (e) => {
+      if (isUnauthorized(e)) qc.clear();
+    },
   });
 }
 
@@ -161,16 +167,23 @@ export function useUpdateEnvVars(id: string) {
 }
 
 /** Polls an upload session until it's ready or failed. */
-export const useUpload = (id: string | null) =>
-  useQuery({
+export function useUpload(id: string | null) {
+  const qc = useQueryClient();
+  return useQuery({
     queryKey: qk.upload(id ?? ""),
-    queryFn: () => api.projects.getUpload(id!),
+    queryFn: async () => {
+      const s = await api.projects.getUpload(id!);
+      // A finished ZIP/APK import has created a project: refresh lists (e.g. the sidebar).
+      if (s.status === "ready") qc.invalidateQueries({ queryKey: qk.projects });
+      return s;
+    },
     enabled: !!id,
     refetchInterval: (q) => {
       const s = q.state.data?.status;
       return s === "ready" || s === "failed" ? false : 1000;
     },
   });
+}
 
 /* ---------------- files / git / diagnostics ---------------- */
 

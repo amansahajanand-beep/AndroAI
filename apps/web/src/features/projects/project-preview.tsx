@@ -16,35 +16,119 @@ export function initialsOf(name: string) {
     .join("");
 }
 
+/** A calm per-project accent: the project's hue at moderate chroma (no loud gradients). */
+const accent = (h: number, l = 0.6, c = 0.14) => `oklch(${l} ${c} ${h})`;
+
+/** Schematic screen content; one layout per project so a grid of cards has variety. */
+function ScreenBody({ project, h }: { project: Project; h: number }) {
+  if (project.isApkAnalysis) {
+    // APK analyses: decompiled source, shown as code lines.
+    const widths = ["w-3/4", "w-1/2", "w-5/6", "w-2/3", "w-1/3", "w-3/5", "w-4/5"];
+    return (
+      <div className="grid gap-[5px] px-2.5 pt-2">
+        {widths.map((w, i) => (
+          <i key={i} className={cn("h-[3px] rounded-full", w, i % 3 === 0 ? "bg-warning/50" : "bg-foreground/15")} style={{ marginLeft: `${(i % 3) * 6}px` }} />
+        ))}
+      </div>
+    );
+  }
+  const layout = h % 3;
+  if (layout === 0) {
+    // List: avatar rows.
+    return (
+      <div className="grid gap-2 px-2.5 pt-2">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="flex items-center gap-1.5">
+            <i className="size-3.5 shrink-0 rounded-full" style={{ background: accent(h, 0.72, 0.09), opacity: 1 - i * 0.15 }} />
+            <div className="grid flex-1 gap-[3px]">
+              <i className="h-[3px] w-3/4 rounded-full bg-foreground/25" />
+              <i className="h-[3px] w-1/2 rounded-full bg-foreground/12" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (layout === 1) {
+    // Cards: a hero card and two tiles.
+    return (
+      <div className="grid gap-1.5 px-2.5 pt-2">
+        <div className="grid h-11 content-end gap-[3px] rounded-md p-1.5" style={{ background: accent(h, 0.62, 0.13) }}>
+          <i className="h-[3px] w-1/2 rounded-full bg-white/80" />
+          <i className="h-[3px] w-1/3 rounded-full bg-white/50" />
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          {[0, 1].map((i) => (
+            <div key={i} className="grid h-8 content-end gap-[3px] rounded-md bg-foreground/[0.06] p-1.5">
+              <i className="h-[3px] w-3/4 rounded-full bg-foreground/25" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  // Chart: a headline number and bars.
+  const bars = [40, 65, 50, 85, 60, 75].map((v, i) => ((v + h + i * 13) % 55) + 35);
+  return (
+    <div className="px-2.5 pt-2">
+      <i className="block h-[3px] w-1/3 rounded-full bg-foreground/15" />
+      <i className="mt-1.5 block h-[6px] w-1/2 rounded-full bg-foreground/35" />
+      <div className="mt-2.5 flex h-12 items-end gap-[3px]">
+        {bars.map((v, i) => (
+          <i key={i} className="flex-1 rounded-t-[2px]" style={{ height: `${v}%`, background: accent(h, 0.66, 0.12), opacity: i === 3 ? 1 : 0.55 }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /**
- * A generated "device" preview: a unique hue per project, with the app's
- * initials on the screen. Put it inside a `group` element for the hover tilt.
+ * The project thumbnail: a calm neutral stage with a faint project tint, and a realistic phone
+ * rising from the bottom edge showing a schematic screen of the app (status bar, app bar with
+ * the project's initials and name, content, tab bar). Put it inside a `group` for the hover lift.
  */
 export function ProjectPreview({ project, className }: { project: Project; className?: string }) {
   const h = hueOf(project.id);
   return (
     <div
       aria-hidden
-      className={cn("relative grid h-36 place-items-center overflow-hidden", className)}
+      className={cn("relative h-36 overflow-hidden bg-surface-2", className)}
       style={{
-        backgroundImage: `radial-gradient(80% 90% at 20% 0%, oklch(0.62 0.2 ${h} / 0.55), transparent 70%), radial-gradient(70% 80% at 90% 100%, oklch(0.55 0.22 ${(h + 70) % 360} / 0.5), transparent 70%), linear-gradient(180deg, var(--surface-2), var(--surface))`,
+        backgroundImage: `radial-gradient(60% 70% at 50% 100%, color-mix(in oklab, ${accent(h)} 14%, transparent), transparent 70%)`,
       }}
     >
-      <div className="dot-grid absolute inset-0 opacity-30" />
-      <div className="relative h-[8.6rem] w-[4.7rem] translate-y-6 rounded-[14px] border border-white/20 bg-background/85 p-1.5 shadow-[0_18px_40px_-14px_rgb(0_0_0/0.55)] backdrop-blur transition-transform duration-500 group-hover:translate-y-3 group-hover:-rotate-3">
-        <div
-          className="grid h-8 place-items-center rounded-lg font-display text-[13px] font-semibold text-white"
-          style={{ backgroundImage: `linear-gradient(135deg, oklch(0.6 0.2 ${h}), oklch(0.5 0.22 ${(h + 70) % 360}))` }}
-        >
-          {project.isApkAnalysis ? <Package className="size-4" /> : initialsOf(project.name)}
-        </div>
-        <div className="mt-1.5 grid gap-1">
-          <i className="h-1.5 w-full rounded-full bg-foreground/15" />
-          <i className="h-1.5 w-3/4 rounded-full bg-foreground/10" />
-          <i className="h-5 w-full rounded-md bg-foreground/[0.07]" />
-          <i className="h-5 w-full rounded-md bg-foreground/[0.07]" />
+      {/* Faint grid texture, fading out towards the edges. */}
+      <div className="absolute inset-0 opacity-[0.35] [background-image:linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [background-size:24px_24px] [mask-image:radial-gradient(ellipse_70%_70%_at_50%_45%,black,transparent)]" />
+
+      <div className="absolute left-1/2 top-[14%] w-[8.25rem] -translate-x-1/2 transition-transform duration-500 ease-out group-hover:-translate-y-1.5">
+        <div className="rounded-[1.35rem] bg-[#0e0e12] p-[4px] shadow-[0_18px_40px_-18px_rgb(0_0_0/0.55),0_0_0_1px_rgb(255_255_255/0.06)] transition-shadow duration-500 group-hover:shadow-[0_26px_50px_-18px_rgb(0_0_0/0.6),0_0_0_1px_rgb(255_255_255/0.08)]">
+          <div className="h-[15rem] overflow-hidden rounded-[1.1rem] bg-background">
+            {/* Status bar */}
+            <div className="flex items-center justify-between px-3 pt-1.5 text-[6.5px] font-semibold text-foreground/70">
+              <span>9:41</span>
+              <span className="h-[7px] w-7 rounded-full bg-[#0e0e12]" />
+              <span className="flex gap-[2px]">
+                <i className="h-[4px] w-[4px] rounded-full bg-foreground/50" />
+                <i className="h-[4px] w-[7px] rounded-[1px] bg-foreground/50" />
+              </span>
+            </div>
+            {/* App bar */}
+            <div className="mt-1.5 flex items-center gap-1.5 px-2.5">
+              <span
+                className="grid size-[18px] shrink-0 place-items-center rounded-[5px] text-[7px] font-bold text-white"
+                style={{ background: project.isApkAnalysis ? "var(--warning)" : accent(h, 0.55, 0.15) }}
+              >
+                {project.isApkAnalysis ? <Package className="size-2.5" /> : initialsOf(project.name)}
+              </span>
+              <span className="truncate text-[7.5px] font-semibold text-foreground">{project.name}</span>
+            </div>
+            <ScreenBody project={project} h={h} />
+          </div>
         </div>
       </div>
+
+      {/* Soft fade where the phone meets the card's bottom edge. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-linear-to-t from-surface-2 to-transparent" />
     </div>
   );
 }
@@ -265,14 +349,18 @@ export function LiveAppPreview({ project, task, menu }: { project: Project; task
   );
 }
 
-/** Small square thumbnail used by the list view. */
+/** Small square thumbnail used by the list view: the project's initials on a calm tinted tile. */
 export function ProjectThumb({ project, className }: { project: Project; className?: string }) {
   const h = hueOf(project.id);
   return (
     <span
       aria-hidden
-      className={cn("grid size-10 shrink-0 place-items-center rounded-xl font-display text-[13px] font-semibold text-white shadow-[0_6px_16px_-8px_rgb(0_0_0/0.5)]", className)}
-      style={{ backgroundImage: `linear-gradient(135deg, oklch(0.62 0.2 ${h}), oklch(0.5 0.22 ${(h + 70) % 360}))` }}
+      className={cn("grid size-10 shrink-0 place-items-center rounded-xl border border-border text-[13px] font-semibold", className)}
+      style={
+        project.isApkAnalysis
+          ? { background: "var(--warning-soft)", color: "var(--warning)" }
+          : { background: `color-mix(in oklab, ${accent(h)} 14%, var(--surface))`, color: accent(h, 0.55, 0.15) }
+      }
     >
       {project.isApkAnalysis ? <Package className="size-4" /> : initialsOf(project.name)}
     </span>

@@ -5,17 +5,17 @@ import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-sm font-medium transition-all duration-200 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-colors duration-150 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "bg-brand text-white shadow-[0_6px_18px_-8px_var(--brand-glow)] hover:shadow-[0_10px_26px_-8px_var(--brand-glow)] hover:brightness-110",
-        secondary: "bg-secondary text-secondary-foreground hover:bg-surface-3 border border-border",
-        outline: "border border-border-strong bg-surface/40 hover:border-primary/50 hover:bg-primary-soft",
-        ghost: "hover:bg-surface-2 text-foreground",
-        subtle: "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
+        default: "bg-foreground text-background hover:bg-foreground/85",
+        secondary: "bg-surface-2 text-foreground hover:bg-surface-3",
+        outline: "border border-border-strong bg-transparent hover:bg-surface-2",
+        ghost: "hover:bg-surface-3 text-foreground",
+        subtle: "text-muted-foreground hover:bg-surface-3 hover:text-foreground",
         destructive: "bg-destructive text-destructive-foreground hover:brightness-110",
-        ai: "bg-ai text-ai-foreground shadow-[0_6px_18px_-8px_var(--ai)] hover:brightness-110",
+        ai: "bg-ai text-ai-foreground hover:brightness-110",
         link: "text-primary underline-offset-4 hover:underline px-0 h-auto",
       },
       size: {

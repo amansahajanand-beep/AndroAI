@@ -4,20 +4,23 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Bot, Code2, Hammer, Info, MousePointerSquareDashed, Settings, TestTube2 } from "lucide-react";
 import { ErrorState } from "@/components/states/states";
+import { PAGE_COLUMN } from "@/components/layout/page";
 import { Alert, Skeleton } from "@/components/ui/primitives";
 import { useProject } from "@/lib/api/hooks";
 import { cn } from "@/lib/utils";
-import { useRecordProjectView } from "@/stores/recent-projects";
 import { ProjectTechBadges } from "./project-meta";
 
-const TABS = [
-  { seg: "ide", label: "IDE", icon: Code2 },
+/** Every section of a project, in one place: the project tabs and the editor header both use this list. */
+export const PROJECT_SECTIONS = [
+  { seg: "ide", label: "Code", icon: Code2 },
   { seg: "agent", label: "AI agent", icon: Bot },
   { seg: "builds", label: "Builds", icon: Hammer },
   { seg: "tests", label: "Tests", icon: TestTube2 },
   { seg: "visual-editor", label: "Visual editor", icon: MousePointerSquareDashed },
   { seg: "settings", label: "Settings", icon: Settings },
 ] as const;
+
+const TABS = PROJECT_SECTIONS;
 
 export function ApkAnalysisNotice({ className }: { className?: string }) {
   return (
@@ -35,12 +38,11 @@ export function ApkAnalysisNotice({ className }: { className?: string }) {
 export function ProjectFrame({ projectId, children }: { projectId: string; children: React.ReactNode }) {
   const project = useProject(projectId);
   const pathname = usePathname();
-  useRecordProjectView(projectId);
 
   return (
     <div>
-      <div className="border-b border-border bg-surface/60">
-        <div className="mx-auto w-full px-4 pt-5 sm:px-6 lg:w-[min(90%,1600px)] lg:px-0">
+      <div className="border-b border-border">
+        <div className={cn(PAGE_COLUMN, "pt-5")}>
           {project.isPending ? (
             <Skeleton className="h-6 w-48" />
           ) : project.isError ? (
@@ -57,7 +59,7 @@ export function ProjectFrame({ projectId, children }: { projectId: string; child
               <ProjectTechBadges project={project.data} />
             </div>
           )}
-          <nav aria-label="Project" className="-mb-px mt-3 flex gap-1 overflow-x-auto">
+          <nav aria-label="Project" className="mt-3 flex gap-1 overflow-x-auto pb-2.5">
             {TABS.map((t) => {
               const href = `/projects/${projectId}/${t.seg}`;
               const active = pathname.startsWith(href);
@@ -67,8 +69,8 @@ export function ProjectFrame({ projectId, children }: { projectId: string; child
                   href={href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[14px] transition-colors",
-                    active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+                    "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[13.5px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                    active ? "bg-surface-3 text-foreground" : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
                   )}
                 >
                   <t.icon className="size-3.5" aria-hidden />
@@ -80,7 +82,7 @@ export function ProjectFrame({ projectId, children }: { projectId: string; child
         </div>
       </div>
       {project.data?.isApkAnalysis ? (
-        <div className="mx-auto w-full px-4 pt-4 sm:px-6 lg:w-[min(90%,1600px)] lg:px-0">
+        <div className={cn(PAGE_COLUMN, "pt-4")}>
           <ApkAnalysisNotice />
         </div>
       ) : null}

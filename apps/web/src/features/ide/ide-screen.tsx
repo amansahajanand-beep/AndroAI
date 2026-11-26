@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AgentIntent, FileNode, ProjectStreamEvent } from "@apppilot/contracts";
@@ -10,8 +10,13 @@ import {
   AlertCircle,
   AlertTriangle,
   Bot,
+  Code2,
+  Files,
+  FolderKanban,
   Hammer,
   Keyboard,
+  Menu,
+  MessageSquare,
   PanelBottom,
   PanelLeft,
   PanelRight,
@@ -21,10 +26,21 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { LogoMark } from "@/components/brand/logo";
-import { MockModeBadge, ThemeToggle, UserMenu } from "@/components/layout/chrome";
+import { MockModeBadge, UserMenu } from "@/components/layout/chrome";
 import { ErrorState } from "@/components/states/states";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Tooltip } from "@/components/ui/overlays";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  Tooltip,
+} from "@/components/ui/overlays";
 import { Input, Kbd, Skeleton } from "@/components/ui/primitives";
 import { errorMessage, isPendingBackend } from "@/lib/api/errors";
 import { qk, useAgentTasks, useBuildActions, useDiagnostics, useFileTree, useProject } from "@/lib/api/hooks";
@@ -32,8 +48,7 @@ import { useEventStream } from "@/lib/realtime/use-event-stream";
 import { cn } from "@/lib/utils";
 import { useEditorSettings } from "@/stores/editor-settings";
 import { isReviewTab, useDirtyPaths, useIdeStore } from "@/stores/ide-store";
-import { ApkAnalysisNotice } from "../projects/project-frame";
-import { ProjectTechBadges } from "../projects/project-meta";
+import { ApkAnalysisNotice, PROJECT_SECTIONS } from "../projects/project-frame";
 import { AssistantPanel } from "./assistant-panel";
 import { BottomPanel } from "./bottom-panel";
 import { EditorArea } from "./editor-area";
@@ -53,16 +68,39 @@ function flatten(nodes: FileNode[], out: FileNode[] = []) {
   return out;
 }
 
+/** A 1px divider between panels with a wider invisible grab area; it turns violet on hover and while dragging. */
 function ResizeHandle({ direction }: { direction: "horizontal" | "vertical" }) {
   return (
     <PanelResizeHandle
       className={cn(
-        "relative bg-border transition-colors data-[resize-handle-state=drag]:bg-primary data-[resize-handle-state=hover]:bg-primary/60",
+        "relative z-10 shrink-0 bg-border outline-none transition-colors duration-150 data-[resize-handle-state=drag]:bg-primary data-[resize-handle-state=hover]:bg-primary/60",
         direction === "horizontal" ? "w-px after:absolute after:inset-y-0 after:-left-1 after:w-2" : "h-px after:absolute after:inset-x-0 after:-top-1 after:h-2",
       )}
     />
   );
 }
+
+/** Panel surface. Panels sit edge to edge; the resize handles draw the single line between them. */
+function PanelCard({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn("relative h-full min-h-0 overflow-hidden bg-card", className)}>{children}</div>;
+}
+
+const subscribePhone = (onChange: () => void) => {
+  const mq = window.matchMedia("(max-width: 767px)");
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+};
+/** Phone-width screens get one panel at a time instead of side-by-side panels. */
+function useIsPhone() {
+  return useSyncExternalStore(subscribePhone, () => window.matchMedia("(max-width: 767px)").matches, () => false);
+}
+
+type PhonePane = "files" | "code" | "chat";
+const PHONE_PANES: { id: PhonePane; label: string; icon: typeof Code2 }[] = [
+  { id: "files", label: "Files", icon: Files },
+  { id: "code", label: "Code", icon: Code2 },
+  { id: "chat", label: "Chat", icon: MessageSquare },
+];
 
 function QuickOpen({ projectId, open, onOpenChange }: { projectId: string; open: boolean; onOpenChange: (o: boolean) => void }) {
   const tree = useFileTree(projectId);
@@ -168,7 +206,7 @@ function StatusBar({ projectId, onShortcuts, streamOpen }: { projectId: string; 
   const file = active && !isReviewTab(active) ? active : null;
 
   return (
-    <footer className="flex h-6 shrink-0 items-center gap-3 border-t border-border bg-surface px-2 text-[12px] text-muted-foreground">
+    <footer className="flex h-7 shrink-0 items-center border-t border-border gap-3.5 px-3.5 text-[12px] text-subtle-foreground [&_a:hover]:text-foreground [&_button:hover]:text-foreground">
       <button className="flex items-center gap-2 hover:text-foreground" onClick={() => setBottomTab("problems")} aria-label={`${errors} errors, ${warnings} warnings. Show problems`}>
         <span className="flex items-center gap-1"><AlertCircle className={cn("size-3", errors && "text-destructive")} aria-hidden />{errors}</span>
         <span className="flex items-center gap-1"><AlertTriangle className={cn("size-3", warnings && "text-warning")} aria-hidden />{warnings}</span>
@@ -211,6 +249,17 @@ export function IdeScreen({ projectId }: { projectId: string }) {
   const router = useRouter();
   const explorerRef = useRef<FileExplorerHandle>(null);
   const [quickOpen, setQuickOpen] = useState(false);
+  const isPhone = useIsPhone();
+  const [phonePane, setPhonePane] = useState<PhonePane>("code");
+  // On phones, opening a file (from the tree, quick open or a deep link) shows the code pane.
+  useEffect(
+    () =>
+      useIdeStore.subscribe((state, prev) => {
+        const now = state.tabs[projectId]?.active;
+        if (now && now !== prev.tabs[projectId]?.active) setPhonePane("code");
+      }),
+    [projectId],
+  );
   const [shortcuts, setShortcuts] = useState(false);
   const readOnly = project.data?.isApkAnalysis;
   const readOnlyRef = useRef(readOnly);
@@ -307,6 +356,40 @@ export function IdeScreen({ projectId }: { projectId: string }) {
 
   const assistantIntent = params.get("assistant") as AgentIntent | null;
 
+  // Editor + bottom panel, with Preview over them; shared by the desktop panels and the phone layout.
+  const center = (
+          <div className="relative size-full overflow-hidden rounded-none">
+          {/* The editor stays mounted (just hidden) while previewing, so tabs, unsaved buffers and cursor survive. */}
+          <div
+            id="view-panel-code"
+            role="tabpanel"
+            aria-labelledby="view-tab-code"
+            aria-hidden={view === "preview"}
+            inert={view === "preview"}
+            className={cn("size-full transition-opacity duration-200", view === "preview" && "invisible opacity-0")}
+          >
+          <PanelGroup direction="vertical" autoSaveId="apppilot.ide.v">
+            <Panel id="editor" order={1} minSize={20}>
+              <PanelCard>
+                <EditorArea projectId={projectId} aiModifiedPaths={aiModifiedPaths} readOnly={readOnly} />
+              </PanelCard>
+            </Panel>
+            {layout.bottom ? (
+              <>
+                <ResizeHandle direction="vertical" />
+                <Panel id="bottom" order={2} defaultSize={30} minSize={10} maxSize={70}>
+                  <PanelCard>
+                    <BottomPanel projectId={projectId} readOnly={readOnly} />
+                  </PanelCard>
+                </Panel>
+              </>
+            ) : null}
+          </PanelGroup>
+          </div>
+          {view === "preview" ? <PreviewWorkspace projectId={projectId} /> : null}
+          </div>
+  );
+
   if (project.isError) {
     return (
       <div className="grid h-dvh place-items-center">
@@ -316,35 +399,53 @@ export function IdeScreen({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden">
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-surface px-2">
+    // Follows the app theme: a soft frame (light grey / near-black) with each panel on its own card.
+    <div className="flex h-dvh flex-col overflow-hidden bg-surface-2 text-foreground dark:bg-background">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
         <Tooltip content="All projects">
-          <Link href="/projects" className="grid size-8 place-items-center rounded-sm hover:bg-surface-2" aria-label="All projects">
-            <LogoMark className="size-5" />
+          <Link href="/projects" className="grid size-8 place-items-center rounded-lg outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-ring" aria-label="All projects">
+            <LogoMark className="size-6 rounded-[7px] shadow-none" />
           </Link>
         </Tooltip>
-        <div className="flex min-w-0 items-center gap-2">
+        <span className="h-5 w-px bg-border" aria-hidden />
+        <div className="flex min-w-0 items-center gap-2 pl-1">
           {project.data ? (
             <>
-              <h1 className="truncate text-[14px] font-semibold">{project.data.name}</h1>
-              <span className="hidden lg:block"><ProjectTechBadges project={project.data} /></span>
+              <h1 className="truncate text-[14px] font-semibold tracking-tight">{project.data.name}</h1>
             </>
           ) : (
             <Skeleton className="h-4 w-32" />
           )}
         </div>
+        {/* The other project sections (same list as the project tabs). Phones get them in a menu. */}
         <nav aria-label="Project" className="ml-2 hidden items-center gap-0.5 md:flex">
-          {[
-            ["agent", "AI agent"],
-            ["builds", "Builds"],
-            ["tests", "Tests"],
-            ["settings", "Settings"],
-          ].map(([seg, label]) => (
-            <Link key={seg} href={`/projects/${projectId}/${seg}`} className="rounded-sm px-2 py-1 text-[13px] text-muted-foreground hover:bg-surface-2 hover:text-foreground">
-              {label}
+          {PROJECT_SECTIONS.filter((t) => t.seg !== "ide").map((t) => (
+            <Link key={t.seg} href={`/projects/${projectId}/${t.seg}`} className="inline-flex h-8 items-center rounded-lg px-2.5 text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:bg-surface-3 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+              {t.label}
             </Link>
           ))}
         </nav>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="subtle" size="sm" className="rounded-lg md:hidden" aria-label="Project sections">
+              <Menu /> Project
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-52">
+            {PROJECT_SECTIONS.filter((t) => t.seg !== "ide").map((t) => (
+              <DropdownMenuItem key={t.seg} asChild>
+                <Link href={`/projects/${projectId}/${t.seg}`}>
+                  <t.icon /> {t.label}
+                </Link>
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuItem asChild>
+              <Link href="/projects">
+                <FolderKanban /> All projects
+              </Link>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <ViewToggle
           value={view}
           onChange={setView}
@@ -354,7 +455,8 @@ export function IdeScreen({ projectId }: { projectId: string }) {
           {!readOnly ? (
             <Button
               size="sm"
-              variant="outline"
+              variant="secondary"
+              className="rounded-lg"
               loading={start.isPending}
               onClick={() =>
                 start.mutate(
@@ -372,7 +474,7 @@ export function IdeScreen({ projectId }: { projectId: string }) {
               <Hammer /> Build
             </Button>
           ) : null}
-          <span className="mx-1 h-5 w-px bg-border" aria-hidden />
+          <span className="mx-1.5 h-5 w-px bg-border" aria-hidden />
           <Tooltip content="Explorer" shortcut={`${MOD}+B`}>
             <Button variant={layout.explorer ? "secondary" : "subtle"} size="icon-sm" aria-pressed={layout.explorer} aria-label="Toggle explorer" onClick={() => toggle("explorer")}><PanelLeft /></Button>
           </Tooltip>
@@ -384,60 +486,74 @@ export function IdeScreen({ projectId }: { projectId: string }) {
               {layout.assistant ? <PanelRight /> : <Sparkles className="text-ai" />}
             </Button>
           </Tooltip>
-          <span className="mx-1 h-5 w-px bg-border" aria-hidden />
-          <ThemeToggle />
+          <span className="mx-1.5 h-5 w-px bg-border" aria-hidden />
           <UserMenu compact />
         </div>
       </header>
 
-      {readOnly ? <ApkAnalysisNotice className="m-2 mb-0 rounded-md" /> : null}
+      {readOnly ? <ApkAnalysisNotice className="rounded-none border-x-0 border-t-0" /> : null}
 
+      {isPhone ? (
+        <>
+          <div className="min-h-0 flex-1">
+            {phonePane === "files" ? (
+              <PanelCard>
+                <FileExplorer ref={explorerRef} projectId={projectId} readOnly={readOnly} />
+              </PanelCard>
+            ) : phonePane === "chat" ? (
+              <PanelCard>
+                <AssistantPanel projectId={projectId} initialIntent={assistantIntent ?? undefined} isApk={readOnly} onClose={() => setPhonePane("code")} />
+              </PanelCard>
+            ) : (
+              center
+            )}
+          </div>
+          <nav role="tablist" aria-label="Editor panels" className="grid shrink-0 grid-cols-3 border-t border-border bg-card">
+            {PHONE_PANES.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={phonePane === t.id}
+                onClick={() => setPhonePane(t.id)}
+                className={cn(
+                  "flex h-12 flex-col items-center justify-center gap-0.5 text-[11.5px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                  phonePane === t.id ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                <t.icon className={cn("size-[18px]", phonePane === t.id && "text-primary")} aria-hidden />
+                {t.label}
+              </button>
+            ))}
+          </nav>
+        </>
+      ) : (
       <PanelGroup direction="horizontal" autoSaveId="apppilot.ide.h" className="min-h-0 flex-1">
         {layout.explorer ? (
           <>
             <Panel id="explorer" order={1} defaultSize={18} minSize={12} maxSize={35}>
-              <FileExplorer ref={explorerRef} projectId={projectId} readOnly={readOnly} />
+              <PanelCard>
+                <FileExplorer ref={explorerRef} projectId={projectId} readOnly={readOnly} />
+              </PanelCard>
             </Panel>
             <ResizeHandle direction="horizontal" />
           </>
         ) : null}
         <Panel id="center" order={2} minSize={30}>
-          <div className="relative size-full">
-          {/* The editor stays mounted (just hidden) while previewing, so tabs, unsaved buffers and cursor survive. */}
-          <div
-            id="view-panel-code"
-            role="tabpanel"
-            aria-labelledby="view-tab-code"
-            aria-hidden={view === "preview"}
-            inert={view === "preview"}
-            className={cn("size-full transition-opacity duration-200", view === "preview" && "invisible opacity-0")}
-          >
-          <PanelGroup direction="vertical" autoSaveId="apppilot.ide.v">
-            <Panel id="editor" order={1} minSize={20}>
-              <EditorArea projectId={projectId} aiModifiedPaths={aiModifiedPaths} readOnly={readOnly} />
-            </Panel>
-            {layout.bottom ? (
-              <>
-                <ResizeHandle direction="vertical" />
-                <Panel id="bottom" order={2} defaultSize={30} minSize={10} maxSize={70}>
-                  <BottomPanel projectId={projectId} readOnly={readOnly} />
-                </Panel>
-              </>
-            ) : null}
-          </PanelGroup>
-          </div>
-          {view === "preview" ? <PreviewWorkspace projectId={projectId} /> : null}
-          </div>
+          {center}
         </Panel>
         {layout.assistant ? (
           <>
             <ResizeHandle direction="horizontal" />
             <Panel id="assistant" order={3} defaultSize={26} minSize={18} maxSize={45}>
-              <AssistantPanel projectId={projectId} initialIntent={assistantIntent ?? undefined} isApk={readOnly} onClose={() => toggle("assistant", false)} />
+              <PanelCard>
+                <AssistantPanel projectId={projectId} initialIntent={assistantIntent ?? undefined} isApk={readOnly} onClose={() => toggle("assistant", false)} />
+              </PanelCard>
             </Panel>
           </>
         ) : null}
       </PanelGroup>
+      )}
 
       <StatusBar projectId={projectId} onShortcuts={() => setShortcuts(true)} streamOpen={stream === "open"} />
       <QuickOpen projectId={projectId} open={quickOpen} onOpenChange={setQuickOpen} />

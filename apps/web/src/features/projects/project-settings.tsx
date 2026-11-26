@@ -172,6 +172,7 @@ function DangerZone({ project }: { project: Project }) {
         confirmLabel="Delete project"
         destructive
         loading={del.isPending}
+        confirmDisabled={typed !== project.name}
         onConfirm={() => {
           if (typed !== project.name) return;
           del.mutate(project.id, {

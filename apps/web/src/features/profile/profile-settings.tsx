@@ -1,6 +1,7 @@
 "use client";
 
 import { useTheme } from "next-themes";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import type { User, UserPreferences } from "@apppilot/contracts";
 import { toast } from "sonner";
@@ -50,7 +51,7 @@ function PasswordCard() {
   return (
     <Card>
       <CardHeader><div><CardTitle>Password</CardTitle></div></CardHeader>
-      <CardContent className="grid gap-4 sm:grid-cols-3">
+      <CardContent className="grid max-w-md gap-4">
         <Field label="Current password" htmlFor="pw-cur"><Input id="pw-cur" type="password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} /></Field>
         <Field label="New password" htmlFor="pw-new"><Input id="pw-new" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} /></Field>
         <Field label="Confirm new password" htmlFor="pw-confirm" error={err}><Input id="pw-confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} /></Field>
@@ -154,13 +155,21 @@ function ApiKeysCard() {
   );
 }
 
+const SETTINGS_TABS = ["account", "preferences", "editor", "api"] as const;
+
 export function ProfileSettingsScreen() {
   const session = useSession();
   const prefs = usePreferences();
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  // The URL picks the tab (?tab=preferences), so the account menu can link straight to one.
+  const requested = params.get("tab");
+  const tab = SETTINGS_TABS.find((t) => t === requested) ?? "account";
   return (
     <PageBody className="max-w-3xl">
       <PageHeader title="Settings" />
-      <Tabs defaultValue="account">
+      <Tabs value={tab} onValueChange={(v) => router.replace(`${pathname}?tab=${v}`, { scroll: false })}>
         <TabsList className="mb-5">
           <TabsTrigger value="account">Account</TabsTrigger>
           <TabsTrigger value="preferences">Preferences</TabsTrigger>

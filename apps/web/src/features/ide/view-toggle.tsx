@@ -47,7 +47,7 @@ export function ViewToggle({
     >
       <span
         aria-hidden
-        className="absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-full bg-card shadow-[0_1px_2px_rgb(21_17_43/0.14)] ring-1 ring-primary/25 transition-transform duration-200 ease-out"
+        className="absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-full bg-surface-3 shadow-[0_1px_2px_rgb(0_0_0/0.3)] transition-transform duration-200 ease-out"
         style={{ transform: `translateX(${activeIndex * 100}%)` }}
       />
       {TABS.map(({ value: v, label, icon: Icon }) => {

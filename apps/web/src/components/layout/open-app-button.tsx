@@ -18,7 +18,7 @@ export function useAppEntry() {
 }
 
 const PILL =
-  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-white font-medium text-[#0b0a1a] shadow-[0_8px_30px_-8px_rgb(255_255_255/0.45)] transition-all duration-200 hover:scale-[1.03] hover:shadow-[0_10px_36px_-6px_rgb(255_255_255/0.6)] active:scale-[0.97]";
+  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-white font-medium text-[#0b0a1a] transition-colors duration-150 hover:bg-white/85 active:scale-[0.98]";
 
 /** Primary entry into the application from the marketing site. */
 export function OpenAppButton({ size = "md", className }: { size?: "md" | "lg"; className?: string }) {
@@ -31,7 +31,7 @@ export function OpenAppButton({ size = "md", className }: { size?: "md" | "lg"; 
   );
 }
 
-/** Guests see Sign in / Create account; signed-in users see their account menu. */
+/** Guests see Sign in and Sign up; signed-in users see their avatar and account menu. */
 export function LandingAccount() {
   const { signedIn, loading } = useAppEntry();
   if (signedIn) {
@@ -42,13 +42,14 @@ export function LandingAccount() {
     );
   }
   if (loading) return null;
+  // Signed out: both options on every screen size (phones included).
   return (
     <>
-      <Link href="/login" className="hidden h-10 items-center rounded-full px-4 text-[14px] font-medium text-white/80 transition-colors hover:text-white sm:inline-flex">
+      <Link href="/login" className="inline-flex h-10 items-center rounded-full px-3.5 text-[14px] font-medium text-white/80 transition-colors hover:text-white sm:px-4">
         Sign in
       </Link>
-      <Link href="/register" className="hidden h-10 items-center rounded-full px-4 text-[14px] font-medium text-white/80 transition-colors hover:text-white md:inline-flex">
-        Create account
+      <Link href="/register" className={cn(PILL, "h-9 px-4 text-[14px]")}>
+        Sign up
       </Link>
     </>
   );

@@ -71,7 +71,7 @@ function BuildOutput({ projectId, readOnly }: { projectId: string; readOnly?: bo
   if (builds.isError) return <ErrorState error={builds.error} compact onRetry={() => builds.refetch()} />;
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-3 text-[13px]">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3.5 text-[13px]">
         {latest ? (
           <>
             <Link href={`/projects/${projectId}/builds?build=${latest.id}`} className="font-medium hover:underline">Build #{latest.number}</Link>
@@ -87,7 +87,7 @@ function BuildOutput({ projectId, readOnly }: { projectId: string; readOnly?: bo
           <Button
             size="sm"
             variant="outline"
-            className="ml-auto h-6 text-[13px]"
+            className="ml-auto h-7 rounded-lg text-[13px]"
             loading={start.isPending}
             onClick={() => start.mutate({ projectId, outputType: "apk", variant: "debug" }, { onError: (e) => toast.error(isPendingBackend(e) ? "Builds aren't available yet — the build endpoint is pending." : errorMessage(e)) })}
           >
@@ -95,7 +95,7 @@ function BuildOutput({ projectId, readOnly }: { projectId: string; readOnly?: bo
           </Button>
         ) : null}
       </div>
-      {latest ? <LogViewer lines={log.lines} live={log.live} className="min-h-0 flex-1" /> : <EmptyState compact title="Run a build to see Gradle output" />}
+      {latest ? <LogViewer lines={log.lines} live={log.live} emptyText={log.query.isPending ? "Loading output…" : undefined} className="min-h-0 flex-1" /> : <EmptyState compact title="Run a build to see Gradle output" />}
     </div>
   );
 }
@@ -181,9 +181,9 @@ export function BottomPanel({ projectId, readOnly }: { projectId: string; readOn
   ];
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
-      <div className="flex h-8 shrink-0 items-center border-b border-border pr-1">
-        <div role="tablist" aria-label="Panels" className="flex h-full min-w-0 flex-1 overflow-x-auto">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border px-2">
+        <div role="tablist" aria-label="Panels" className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -194,8 +194,8 @@ export function BottomPanel({ projectId, readOnly }: { projectId: string; readOn
                 if (t.id === "terminal") setTerminalMounted(true);
               }}
               className={cn(
-                "flex shrink-0 items-center gap-1.5 border-b-2 px-3 text-[13px]",
-                tab === t.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+                "flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                tab === t.id ? "bg-surface-3 text-foreground" : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
               )}
             >
               <t.icon className="size-3.5" aria-hidden />

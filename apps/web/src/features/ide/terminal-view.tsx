@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTheme } from "next-themes";
 import type { TerminalClientFrame, TerminalServerFrame } from "@apppilot/contracts";
 import { RotateCw } from "lucide-react";
 import { PendingBackend } from "@/components/states/states";
@@ -25,12 +26,24 @@ function isAllowedSocketUrl(raw: string) {
   }
 }
 
-function cssVar(name: string) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || undefined;
+/** Reads a colour token where the terminal is mounted. */
+function cssVar(name: string, el: Element = document.documentElement) {
+  return getComputedStyle(el).getPropertyValue(name).trim() || undefined;
+}
+
+/** The terminal's colours, from the current theme's tokens. */
+function terminalTheme(el: Element) {
+  return {
+    background: cssVar("--card", el),
+    foreground: cssVar("--foreground", el),
+    cursor: cssVar("--primary", el),
+    selectionBackground: "#6b8cff55",
+  };
 }
 
 export function TerminalView({ projectId }: { projectId: string }) {
   const host = useRef<HTMLDivElement>(null);
+  const termRef = useRef<import("@xterm/xterm").Terminal | null>(null);
   const [state, setState] = useState<State>({ kind: "connecting" });
   const [attempt, setAttempt] = useState(0);
 
@@ -61,13 +74,9 @@ export function TerminalView({ projectId }: { projectId: string }) {
         fontSize: 12,
         cursorBlink: true,
         convertEol: true,
-        theme: {
-          background: cssVar("--background"),
-          foreground: cssVar("--foreground"),
-          cursor: cssVar("--primary"),
-          selectionBackground: "#6b8cff55",
-        },
+        theme: terminalTheme(host.current),
       });
+      termRef.current = term;
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(host.current);
@@ -108,6 +117,7 @@ export function TerminalView({ projectId }: { projectId: string }) {
       cleanupTerm = () => {
         ro.disconnect();
         input.dispose();
+        termRef.current = null;
         term.dispose();
       };
     })();
@@ -118,6 +128,15 @@ export function TerminalView({ projectId }: { projectId: string }) {
       cleanupTerm?.();
     };
   }, [projectId, attempt]);
+
+  // Re-colour the open terminal when the app switches between light and dark.
+  const { resolvedTheme } = useTheme();
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      if (termRef.current && host.current) termRef.current.options.theme = terminalTheme(host.current);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [resolvedTheme]);
 
   if (state.kind === "error") {
     return isPendingBackend(state.error) ? (

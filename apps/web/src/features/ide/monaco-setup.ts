@@ -98,46 +98,42 @@ export function configureMonaco(monaco: Monaco) {
   }
 }
 
-function cssVar(name: string, fallback: string) {
-  if (typeof window === "undefined") return fallback;
-  const root = document.documentElement;
-  const v = getComputedStyle(root).getPropertyValue(name).trim();
-  return /^#[0-9a-f]{6}$/i.test(v) ? v : fallback;
-}
+/** Editor palettes in AppPilot's own colours; the same values as the design tokens, so it matches the panels. */
+const PALETTE = {
+  dark: { bg: "#141319", surface: "#19181f", surface2: "#222129", fg: "#f4f3f8", muted: "#6f6d80", border: "#26242f", primary: "#8b7cff" },
+  light: { bg: "#ffffff", surface: "#ffffff", surface2: "#f4f3f7", fg: "#16141f", muted: "#8a8799", border: "#e7e5ee", primary: "#5b46e8" },
+};
 
+const RULES = {
+  dark: [
+    { token: "comment", foreground: "6f6d80", fontStyle: "italic" },
+    { token: "keyword", foreground: "a99bff" },
+    { token: "string", foreground: "8fd19e" },
+    { token: "number", foreground: "f0b86e" },
+    { token: "type", foreground: "6fd3e6" },
+    { token: "tag", foreground: "a99bff" },
+    { token: "attribute.name", foreground: "d4b5ff" },
+    { token: "attribute.value", foreground: "8fd19e" },
+    { token: "annotation", foreground: "f0b86e" },
+  ],
+  light: [
+    { token: "comment", foreground: "7d7a8f", fontStyle: "italic" },
+    { token: "keyword", foreground: "5b46e8" },
+    { token: "string", foreground: "1f7a3e" },
+    { token: "number", foreground: "9a5a00" },
+    { token: "type", foreground: "0b7285" },
+    { token: "tag", foreground: "5b46e8" },
+    { token: "attribute.name", foreground: "7c3aed" },
+    { token: "attribute.value", foreground: "1f7a3e" },
+    { token: "annotation", foreground: "9a5a00" },
+  ],
+};
+
+/** Defines the "apppilot" theme for the current app theme (re-run whenever the theme changes). */
 function defineThemes(monaco: Monaco) {
-  const dark = document.documentElement.classList.contains("light") ? false : true;
-  const bg = cssVar("--background", dark ? "#11151c" : "#ffffff");
-  const surface = cssVar("--surface", dark ? "#171c25" : "#ffffff");
-  const surface2 = cssVar("--surface-2", dark ? "#1d2330" : "#eef1f5");
-  const fg = cssVar("--foreground", dark ? "#e4e8f0" : "#151a23");
-  const muted = cssVar("--subtle-foreground", dark ? "#66708a" : "#7d8697");
-  const border = cssVar("--border", dark ? "#2a3242" : "#d9dee6");
-  const primary = cssVar("--primary", dark ? "#6b8cff" : "#3d5fe0");
-
-  const rules = dark
-    ? [
-        { token: "comment", foreground: "6b7591", fontStyle: "italic" },
-        { token: "keyword", foreground: "8fa8ff" },
-        { token: "string", foreground: "9fd39a" },
-        { token: "number", foreground: "e9b86b" },
-        { token: "type", foreground: "6fd0e0" },
-        { token: "tag", foreground: "8fa8ff" },
-        { token: "attribute.name", foreground: "c6b2f2" },
-        { token: "attribute.value", foreground: "9fd39a" },
-        { token: "annotation", foreground: "e9b86b" },
-      ]
-    : [
-        { token: "comment", foreground: "7d8697", fontStyle: "italic" },
-        { token: "keyword", foreground: "3d5fe0" },
-        { token: "string", foreground: "1f7a3e" },
-        { token: "number", foreground: "9a5a00" },
-        { token: "type", foreground: "0b7285" },
-        { token: "tag", foreground: "3d5fe0" },
-        { token: "attribute.name", foreground: "6b3fc7" },
-        { token: "attribute.value", foreground: "1f7a3e" },
-        { token: "annotation", foreground: "9a5a00" },
-      ];
+  const dark = !document.documentElement.classList.contains("light");
+  const { bg, surface, surface2, fg, muted, border, primary } = dark ? PALETTE.dark : PALETTE.light;
+  const rules = dark ? RULES.dark : RULES.light;
 
   monaco.editor.defineTheme("apppilot", {
     base: dark ? "vs-dark" : "vs",
@@ -149,6 +145,12 @@ function defineThemes(monaco: Monaco) {
       "editorLineNumber.foreground": muted,
       "editorLineNumber.activeForeground": fg,
       "editor.lineHighlightBackground": surface2 + "80",
+      "editor.lineHighlightBorder": "#00000000",
+      "editorCursor.foreground": primary,
+      "editorWhitespace.foreground": border,
+      "editorBracketMatch.background": primary + "26",
+      "editorBracketMatch.border": primary + "66",
+      "editorOverviewRuler.border": "#00000000",
       "editor.selectionBackground": primary + "40",
       "editorIndentGuide.background1": border,
       "editorWidget.background": surface,

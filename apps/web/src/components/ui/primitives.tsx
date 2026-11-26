@@ -23,8 +23,8 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
       ref={ref}
       type={type}
       className={cn(
-        "flex h-9 w-full min-w-0 rounded-sm border border-input bg-surface/70 px-3 text-[14px] text-foreground placeholder:text-subtle-foreground transition-[border-color,box-shadow] duration-200 hover:border-border-strong",
-        "focus-visible:border-primary focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50",
+        "flex h-9 w-full min-w-0 rounded-md border border-input bg-surface px-3 text-[14px] text-foreground placeholder:text-subtle-foreground transition-[border-color,box-shadow] duration-150 hover:border-subtle-foreground/50",
+        "focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-50",
         "aria-invalid:border-destructive file:mr-2 file:border-0 file:bg-transparent file:text-[14px] file:font-medium",
         className,
       )}
@@ -41,8 +41,8 @@ export const Textarea = React.forwardRef<
   <textarea
     ref={ref}
     className={cn(
-      "flex min-h-20 w-full rounded-md border border-input bg-surface/70 px-3 py-2.5 text-[14px] text-foreground placeholder:text-subtle-foreground transition-[border-color,box-shadow] duration-200 hover:border-border-strong",
-      "focus-visible:border-primary focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive",
+      "flex min-h-20 w-full rounded-lg border border-input bg-surface px-3 py-2.5 text-[14px] text-foreground placeholder:text-subtle-foreground transition-[border-color,box-shadow] duration-200 hover:border-border-strong",
+      "focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive",
       className,
     )}
     {...props}
@@ -94,7 +94,7 @@ export function Field({
 export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("rounded-xl border border-border bg-card text-card-foreground shadow-card", className)}
+      className={cn("rounded-lg border border-border bg-card text-card-foreground shadow-card", className)}
       {...props}
     />
   );
@@ -301,7 +301,7 @@ export function Avatar({
     .join("");
   return (
     <AvatarPrimitive.Root
-      className={cn("relative flex size-8 shrink-0 overflow-hidden rounded-full bg-surface-3 ring-2 ring-primary/30", className)}
+      className={cn("relative flex size-8 shrink-0 overflow-hidden rounded-full bg-surface-3 ring-1 ring-border-strong", className)}
     >
       {src ? <AvatarPrimitive.Image src={src} alt="" className="aspect-square size-full" /> : null}
       <AvatarPrimitive.Fallback className="flex size-full items-center justify-center text-[12px] font-semibold text-muted-foreground">
@@ -317,12 +317,12 @@ export function Switch({ className, ...props }: React.ComponentProps<typeof Swit
   return (
     <SwitchPrimitive.Root
       className={cn(
-        "peer inline-flex h-[18px] w-8 shrink-0 cursor-pointer items-center rounded-full border border-transparent bg-surface-3 transition-colors data-[state=checked]:bg-brand disabled:cursor-not-allowed disabled:opacity-50",
+        "peer inline-flex h-[18px] w-8 shrink-0 cursor-pointer items-center rounded-full border border-transparent bg-surface-3 transition-colors data-[state=checked]:bg-foreground disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       {...props}
     >
-      <SwitchPrimitive.Thumb className="pointer-events-none block size-3.5 translate-x-0.5 rounded-full bg-foreground shadow transition-transform data-[state=checked]:translate-x-[15px] data-[state=checked]:bg-white" />
+      <SwitchPrimitive.Thumb className="pointer-events-none block size-3.5 translate-x-0.5 rounded-full bg-foreground shadow transition-transform data-[state=checked]:translate-x-[15px] data-[state=checked]:bg-background" />
     </SwitchPrimitive.Root>
   );
 }
@@ -331,7 +331,7 @@ export function Checkbox({ className, ...props }: React.ComponentProps<typeof Ch
   return (
     <CheckboxPrimitive.Root
       className={cn(
-        "peer size-4 shrink-0 rounded-[5px] border border-border-strong bg-surface data-[state=checked]:border-transparent data-[state=checked]:bg-brand data-[state=checked]:text-white disabled:opacity-50",
+        "peer size-4 shrink-0 rounded-[5px] border border-border-strong bg-surface data-[state=checked]:border-transparent data-[state=checked]:bg-foreground data-[state=checked]:text-background disabled:opacity-50",
         className,
       )}
       {...props}

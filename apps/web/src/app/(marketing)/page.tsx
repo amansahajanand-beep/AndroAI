@@ -16,6 +16,7 @@ import { ThemeToggle } from "@/components/layout/chrome";
 import { PilotFlight } from "@/features/landing/pilot-flight";
 import { LandingAccount, OpenAppButton, StartProjectButton } from "@/components/layout/open-app-button";
 import { HeroIllustration } from "@/features/landing/hero-illustration";
+import { RedirectSignedIn } from "@/features/landing/redirect-signed-in";
 
 const NAV = [
   { href: "#start", label: "Get started" },
@@ -90,11 +91,12 @@ function PilotGlyph({ className }: { className?: string }) {
 
 const CONTAINER = "mx-auto w-full max-w-6xl px-5 sm:px-6";
 const CARD =
-  "group relative rounded-2xl border border-border bg-card shadow-card transition-all duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-pop";
+  "group relative rounded-xl border border-border bg-card transition-colors duration-200 hover:border-border-strong hover:bg-surface-2";
 
 export default function LandingPage() {
   return (
     <div className="landing min-h-dvh overflow-x-clip bg-background text-foreground">
+      <RedirectSignedIn />
       {/* Hero and nav are always dark, in both themes, like a poster above the page. */}
       <div className="dark">
         <header className="sticky top-0 z-40 px-3 pt-3 sm:px-5 sm:pt-4">
@@ -121,32 +123,27 @@ export default function LandingPage() {
           </div>
         </header>
 
-        <section className="relative isolate -mt-[4.5rem] overflow-hidden bg-[color-mix(in_oklab,var(--brand-1)_14%,black)] text-white">
-          <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
-            <div className="absolute -left-40 top-10 h-[34rem] w-[46rem] rotate-12 rounded-[100%] bg-brand-1 opacity-70 blur-[110px] animate-glow" />
-            <div className="absolute -right-32 top-40 h-[32rem] w-[44rem] -rotate-12 rounded-[100%] bg-brand-3 opacity-60 blur-[120px] animate-glow [animation-delay:1.5s]" />
-            <div className="absolute left-1/3 top-80 h-[22rem] w-[40rem] rotate-[28deg] rounded-[100%] bg-brand-2 opacity-60 blur-[110px]" />
-            <div className="dot-grid absolute inset-0 opacity-30 [mask-image:radial-gradient(ellipse_70%_60%_at_50%_30%,black,transparent)]" />
-          </div>
+        {/* Same charcoal-to-glow background as the Home hero and the sign-in panel. */}
+        <section className="dash-hero relative isolate -mt-[4.5rem] overflow-hidden text-white">
 
           <div className={`${CONTAINER} pb-40 pt-36 text-center md:pb-56 md:pt-48`}>
-            <p className="animate-fade-up">
+            <p>
               <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-[14px] font-medium text-white/90 backdrop-blur">
                 <Sparkles className="size-3.5" aria-hidden /> AppPilot AI for Android teams
               </span>
             </p>
-            <h1 className="mt-8 animate-fade-up text-balance font-display text-[clamp(3rem,10vw,8.5rem)] font-semibold leading-[0.95] tracking-[-0.045em] [animation-delay:100ms]">
+            <h1 className="mt-8 text-balance font-display text-[clamp(3rem,10vw,8.5rem)] font-semibold leading-[0.95] tracking-[-0.045em]">
               Every build,{" "}
               <span className="whitespace-nowrap">
                 piloted
                 <PilotGlyph className="ml-[0.08em] inline-block size-[0.72em] align-[-0.02em]" />
               </span>
             </h1>
-            <p className="mx-auto mt-9 max-w-2xl animate-fade-up text-pretty text-[17px] font-medium leading-relaxed text-white/85 [animation-delay:250ms] md:text-xl">
+            <p className="mx-auto mt-9 max-w-2xl text-pretty text-[17px] font-medium leading-relaxed text-white/85 md:text-xl">
               Describe an app, upload an Android Studio project or inspect an APK. AppPilot&apos;s agents plan, write, build,
               test and repair, and every edit waits for your review in a full browser IDE.
             </p>
-            <div className="mt-11 flex animate-fade-up flex-wrap items-center justify-center gap-3 [animation-delay:400ms]">
+            <div className="mt-11 flex flex-wrap items-center justify-center gap-3">
               <OpenAppButton size="lg" />
               <StartProjectButton />
             </div>
@@ -158,11 +155,7 @@ export default function LandingPage() {
       <main>
         <section className="relative isolate -mt-28 md:-mt-40">
           <div className={`${CONTAINER} pb-16 md:pb-24`}>
-            <div className="relative animate-fade-up [animation-delay:500ms]">
-              <div
-                aria-hidden
-                className="absolute -inset-x-8 -top-10 bottom-10 -z-10 rounded-[2.5rem] bg-linear-to-b from-brand-1/30 via-brand-3/10 to-transparent blur-3xl"
-              />
+            <div className="relative">
               <HeroIllustration />
             </div>
           </div>
@@ -270,7 +263,7 @@ export default function LandingPage() {
           />
           <div className={`${CONTAINER} py-20 text-center md:py-28`}>
             <h2 className="mx-auto max-w-2xl text-balance text-3xl font-semibold tracking-[-0.03em] md:text-5xl">
-              Ship your next Android app <span className="text-brand">with a co-pilot.</span>
+              Ship your next Android app with a co-pilot.
             </h2>
             <div className="mt-9 flex flex-wrap justify-center gap-3">
               <OpenAppButton size="lg" className="bg-foreground text-background shadow-none" />
