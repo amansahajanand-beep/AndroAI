@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import type { AgentIntent, ChatMessage, Diagnostic } from "@apppilot/contracts";
-import { ArrowUp, Bot, FileCode2, ListChecks, Sparkles, TextSelect, Wrench, X } from "lucide-react";
+import type { AgentIntent, AgentTimelineEvent, ChatMessage, Diagnostic } from "@apppilot/contracts";
+import { ArrowUp, Bot, Download, FileCode2, ListChecks, Sparkles, TextSelect, Wrench, X } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState, ErrorState, LoadingRows } from "@/components/states/states";
 import { AgentStatusBadge, isAgentActive } from "@/components/status/status-badge";
@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Select, Tooltip } from "@/components/ui/overlays";
 import { Badge, Kbd, Progress, Textarea } from "@/components/ui/primitives";
 import { errorMessage, isPendingBackend } from "@/lib/api/errors";
-import { useAgentTask, useChangeSet, useDiagnostics, useMessages, useSendMessage } from "@/lib/api/hooks";
+import { useAgentTask, useChangeSet, useDiagnostics, useMessages, useSendMessage, useTimeline } from "@/lib/api/hooks";
 import { basename, cn, formatRelative } from "@/lib/utils";
 import { isReviewTab, useIdeStore } from "@/stores/ide-store";
 import { useTaskStream } from "../agent/use-task-stream";
@@ -35,6 +35,110 @@ const PLACEHOLDER: Record<AgentIntent, string> = {
   refactor: "Describe the refactor, e.g. move data access into a repository…",
 };
 
+const VERB: Record<string, string> = {
+  read: "Read",
+  list: "List",
+  search: "Search",
+  edit: "Edit",
+  write: "Write",
+  delete: "Delete",
+  move: "Move",
+  rename: "Rename",
+};
+
+function DiffBlock({ hunks }: { hunks: { old: string; new: string }[] }) {
+  const lines = (text: string, sign: "-" | "+") => (text ? text.split("\n").slice(0, 12).map((l) => ({ sign, l })) : []);
+  return (
+    <div className="mt-1 max-h-48 overflow-auto rounded-sm border border-border bg-background font-mono text-[11.5px] leading-[1.45]">
+      {hunks.map((h, i) => (
+        <div key={i} className={cn(i > 0 && "border-t border-border")}>
+          {[...lines(h.old, "-"), ...lines(h.new, "+")].map((row, j) => (
+            <div key={j} className={cn("whitespace-pre px-1.5", row.sign === "-" ? "bg-destructive/10 text-destructive" : "bg-git-added/10 text-git-added")}>
+              {row.sign} {row.l}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ActivityRow({ e, current }: { e: AgentTimelineEvent; current: boolean }) {
+  const [open, setOpen] = useState(false);
+  const dot = (
+    <span aria-hidden className={cn("mt-[7px] size-1.5 shrink-0 rounded-full", e.ok === false ? "bg-destructive" : current ? "animate-pulse bg-ai" : "bg-border-strong")} />
+  );
+  if (e.kind === "thought") {
+    return (
+      <li className="grid gap-0.5 text-[12px] text-subtle-foreground">
+        <button onClick={() => e.note && setOpen((v) => !v)} className={cn("flex items-start gap-1.5 text-left", e.note && "hover:text-foreground")} aria-expanded={e.note ? open : undefined}>
+          {dot}
+          <span className="italic">{e.title}</span>
+        </button>
+        {open && e.note ? <p className="ml-3 text-muted-foreground">{e.note}</p> : null}
+      </li>
+    );
+  }
+  if (e.kind === "check") {
+    return (
+      <li className="grid gap-0.5 text-[12.5px]">
+        <div className="flex min-w-0 items-start gap-1.5">
+          {dot}
+          <span className={cn("min-w-0 break-words font-semibold", e.ok === false ? "text-destructive" : "text-foreground")}>{e.title}</span>
+        </div>
+        {e.ok === false && e.note ? <p className="ml-3 whitespace-pre-wrap break-words text-[11.5px] text-destructive/90">{e.note}</p> : null}
+      </li>
+    );
+  }
+  if (e.kind) {
+    const verb = VERB[e.kind] ?? e.kind;
+    const rest = e.path ?? e.title.replace(/^\w+ /, "");
+    return (
+      <li className="grid gap-0.5 text-[12.5px]">
+        <div className="flex min-w-0 items-start gap-1.5">
+          {dot}
+          <span className={cn("min-w-0 break-words", e.ok === false ? "text-destructive" : "text-foreground")}>
+            <span className="font-semibold">{verb}</span> <span className="font-mono text-[12px] text-muted-foreground">{rest}</span>
+            {e.kind === "edit" && e.ok !== false ? <span className="ml-1.5 text-[11px] text-subtle-foreground">Modified</span> : null}
+          </span>
+        </div>
+        {e.ok === false && e.note ? <p className="ml-3 break-words text-[11.5px] text-destructive/90">{e.note}</p> : null}
+        {e.hunks?.length ? <div className="ml-3"><DiffBlock hunks={e.hunks} /></div> : null}
+      </li>
+    );
+  }
+  return (
+    <li className="flex items-start gap-1.5 text-[12px] text-subtle-foreground">
+      {dot}
+      <span className="min-w-0 break-words">{e.title}</span>
+    </li>
+  );
+}
+
+function ActivityFeed({ taskId, active }: { taskId: string; active: boolean }) {
+  const timeline = useTimeline(taskId);
+  const [open, setOpen] = useState(false);
+  const events = timeline.data ?? [];
+  if (events.length === 0) return null;
+  const visible = active || open;
+  return (
+    <div className="grid gap-1.5">
+      {!active ? (
+        <button onClick={() => setOpen((v) => !v)} aria-expanded={open} className="text-left text-[12px] text-muted-foreground hover:text-foreground">
+          {open ? "Hide" : "Show"} {events.length} step{events.length === 1 ? "" : "s"}
+        </button>
+      ) : null}
+      {visible ? (
+        <ol className="grid gap-1" aria-label="Activity">
+          {events.map((e, i) => (
+            <ActivityRow key={e.id} e={e} current={active && i === events.length - 1} />
+          ))}
+        </ol>
+      ) : null}
+    </div>
+  );
+}
+
 function TaskProgress({ taskId, projectId }: { taskId: string; projectId: string }) {
   const task = useAgentTask(taskId);
   useTaskStream(task.data);
@@ -49,7 +153,7 @@ function TaskProgress({ taskId, projectId }: { taskId: string; projectId: string
           Details
         </Link>
       </div>
-      {t.currentStep ? <p className="text-[13px] text-muted-foreground">{t.currentStep}</p> : null}
+      <ActivityFeed taskId={t.id} active={active} />
       {t.buildProgress ? <Progress value={t.buildProgress.percent} tone="ai" label="Build progress" /> : null}
       {t.repairIterations > 0 ? <p className="text-[12px] text-warning">Repair attempt {t.repairIterations} of {t.maxRepairIterations}</p> : null}
       {t.blockedReason ? <p className="text-[13px] text-warning">{t.blockedReason}</p> : null}
@@ -58,16 +162,52 @@ function TaskProgress({ taskId, projectId }: { taskId: string; projectId: string
   );
 }
 
+type Row = { key: string; kind: "A" | "M" | "D" | "R"; name: string; title: string };
+
+function summarise(files: { path: string; changeType: string }[]): Row[] {
+  const deleted = new Map<string, string[]>();
+  for (const f of files) if (f.changeType === "delete") deleted.set(basename(f.path), [...(deleted.get(basename(f.path)) ?? []), f.path]);
+  const rows: Row[] = [];
+  const movedFrom = new Set<string>();
+  for (const f of files) {
+    if (f.changeType === "add") {
+      const from = deleted.get(basename(f.path))?.find((p) => !movedFrom.has(p));
+      if (from) {
+        movedFrom.add(from);
+        rows.push({ key: f.path, kind: "R", name: basename(f.path), title: `${from} → ${f.path}` });
+        continue;
+      }
+      rows.push({ key: f.path, kind: "A", name: basename(f.path), title: f.path });
+    } else if (f.changeType === "modify") {
+      rows.push({ key: f.path, kind: "M", name: basename(f.path), title: f.path });
+    }
+  }
+  for (const f of files) {
+    if (f.changeType === "delete" && !movedFrom.has(f.path)) rows.push({ key: f.path, kind: "D", name: basename(f.path), title: f.path });
+  }
+  return rows;
+}
+
 function ChangeSetCard({ id, projectId }: { id: string; projectId: string }) {
   const cs = useChangeSet(id);
   const openReview = useIdeStore((s) => s.openReview);
   if (!cs.data) return null;
   const pending = cs.data.files.filter((f) => f.decision === "pending").length;
+  // A moved file (e.g. after a package rename) is a delete plus an add with the same file name;
+  // show it once, as a move, so a rename of 60 files is not a list of 120.
+  const rows = summarise(cs.data.files);
+  const count = (kind: string) => rows.filter((r) => r.kind === kind).length;
+  const parts = [
+    count("A") && `${count("A")} added`,
+    count("M") && `${count("M")} modified`,
+    count("R") && `${count("R")} moved`,
+    count("D") && `${count("D")} deleted`,
+  ].filter(Boolean);
   return (
-    <div className="mt-2 rounded-md border border-ai/40 p-2">
+    <div className="mt-2 min-w-0 max-w-full overflow-hidden rounded-md border border-ai/40 p-2">
       <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 text-[13px] font-medium">
-          <Sparkles className="size-3.5 text-ai" aria-hidden /> {cs.data.files.length} file{cs.data.files.length === 1 ? "" : "s"} changed
+        <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium">
+          <Sparkles className="size-3.5 shrink-0 text-ai" aria-hidden /> {cs.data.files.length} file{cs.data.files.length === 1 ? "" : "s"} changed
         </span>
         {pending === 0 ? (
           <Badge tone={cs.data.status === "applied" ? "success" : "neutral"}>{cs.data.status.replace("_", " ")}</Badge>
@@ -75,11 +215,12 @@ function ChangeSetCard({ id, projectId }: { id: string; projectId: string }) {
           <Badge tone="ai">Waiting for review</Badge>
         )}
       </div>
-      <ul className="mt-1.5 grid gap-0.5">
-        {cs.data.files.map((f) => (
-          <li key={f.path} className="flex items-center gap-1.5 truncate font-mono text-[12px] text-muted-foreground" title={f.path}>
-            <span className={cn("w-2.5", { add: "text-git-added", modify: "text-git-modified", delete: "text-git-deleted" }[f.changeType])}>{f.changeType === "add" ? "A" : f.changeType === "delete" ? "D" : "M"}</span>
-            {basename(f.path)}
+      {parts.length ? <p className="mt-0.5 text-[12px] text-muted-foreground">{parts.join(" · ")}</p> : null}
+      <ul className="mt-1.5 grid max-h-44 gap-0.5 overflow-y-auto overflow-x-hidden">
+        {rows.map((r) => (
+          <li key={r.key} className="flex min-w-0 items-center gap-1.5 font-mono text-[12px] text-muted-foreground" title={r.title}>
+            <span className={cn("w-2.5 shrink-0", { A: "text-git-added", M: "text-git-modified", D: "text-git-deleted", R: "text-ai" }[r.kind])}>{r.kind}</span>
+            <span className="truncate">{r.name}</span>
           </li>
         ))}
       </ul>
@@ -94,14 +235,14 @@ function Message({ m, projectId }: { m: ChatMessage; projectId: string }) {
   if (m.role === "system") return <p className="px-1 text-center text-[12px] text-subtle-foreground">{m.content}</p>;
   const user = m.role === "user";
   return (
-    <li className={cn("grid gap-1", user && "justify-items-end")}>
+    <li className={cn("grid min-w-0 gap-1", user && "justify-items-end")}>
       <div className="flex items-center gap-1.5 text-[12px] text-subtle-foreground">
         {user ? null : <Bot className="size-3.5 text-ai" aria-hidden />}
         <span>{user ? "You" : "Agent"}</span>
         {m.intent && m.intent !== "chat" ? <span>· {INTENTS.find((i) => i.value === m.intent)?.label}</span> : null}
         <time dateTime={m.createdAt}>· {formatRelative(m.createdAt)}</time>
       </div>
-      <div className={cn("max-w-full whitespace-pre-wrap break-words rounded-md px-2.5 py-2 text-[14px]", user ? "bg-surface-3" : "bg-transparent px-0")}>
+      <div className={cn("min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-md px-2.5 py-2 text-[14px]", user ? "bg-surface-3" : "bg-transparent px-0")}>
         {m.content}
         {m.plan ? (
           <div className="mt-2 rounded-md border border-border p-2">
@@ -156,6 +297,27 @@ export function AssistantPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.data?.length, send.isPending]);
 
+  const isEmpty = messages.data?.length === 0;
+  // Keep the newest activity in view while the agent works, unless the user scrolled up to read.
+  useEffect(() => {
+    const el = listRef.current;
+    const content = el?.firstElementChild;
+    if (!el || !content || typeof ResizeObserver === "undefined") return;
+    let stick = true;
+    const onScroll = () => {
+      stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+    el.addEventListener("scroll", onScroll);
+    const observer = new ResizeObserver(() => {
+      if (stick) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(content);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      observer.disconnect();
+    };
+  }, [messages.isPending, isEmpty]);
+
   const submit = (override?: { intent: AgentIntent; prompt: string }) => {
     const i = override?.intent ?? intent;
     const text = (override?.prompt ?? prompt).trim() || (i === "fix" && errors.length ? "Fix the current build errors." : "");
@@ -186,14 +348,26 @@ export function AssistantPanel({
         <h2 className="flex items-center gap-1.5 text-[13px] font-semibold text-muted-foreground">
           <Sparkles className="size-3.5 text-ai" aria-hidden /> AI assistant
         </h2>
-        <Tooltip content="Hide assistant" shortcut={`${MOD}+Alt+B`}>
-          <Button variant="subtle" size="icon-xs" aria-label="Hide assistant" onClick={onClose}>
-            <X />
-          </Button>
-        </Tooltip>
+        <span className="flex items-center gap-0.5">
+          <Tooltip content="Download the project with the accepted changes (.zip) to open in Android Studio">
+            <a
+              href={`/api/v1/agent/projects/${encodeURIComponent(projectId)}/export`}
+              download
+              aria-label="Download project as ZIP"
+              className="inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-surface-3 hover:text-foreground"
+            >
+              <Download className="size-3.5" aria-hidden />
+            </a>
+          </Tooltip>
+          <Tooltip content="Hide assistant" shortcut={`${MOD}+Alt+B`}>
+            <Button variant="subtle" size="icon-xs" aria-label="Hide assistant" onClick={onClose}>
+              <X />
+            </Button>
+          </Tooltip>
+        </span>
       </div>
 
-      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
         {messages.isPending ? (
           <LoadingRows rows={4} />
         ) : messages.isError ? (

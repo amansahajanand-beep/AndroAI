@@ -213,3 +213,33 @@ def test_pieces_that_are_not_valid_are_skipped_not_fatal():
 def test_nothing_valid_gets_the_usual_repair_attempt():
     c, fake = client(reply("no json here"), reply(json.dumps(GOOD)))
     assert [x.notes for x in ask_many(c)] == ["n"] and len(fake.calls) == 2
+
+
+def _sse(*pieces):
+    import json as _json
+
+    lines = [("data: " + _json.dumps({"choices": [{"delta": {"content": p}}]}) + "\n").encode() for p in pieces]
+    return [*lines, b"\n", b"data: [DONE]\n"]
+
+
+def test_stream_text_yields_pieces_in_order_and_drops_reasoning():
+    from androai_codegen.llm_nvidia import NvidiaClient
+
+    client = NvidiaClient(
+        "k", stream_transport=lambda *a: iter(_sse("<thi", "nk>secret</think>", "Hel", "lo ", "there"))
+    )
+    assert list(client.stream_text("s", "u")) == ["Hel", "lo ", "there"]
+
+
+def test_stream_text_reports_a_failed_call_without_the_key():
+    import pytest
+
+    from androai_codegen.llm_nvidia import LlmError, NvidiaClient
+
+    def broken(*a):
+        raise LlmError("the API call failed (HTTP 503)")
+        yield b""
+
+    with pytest.raises(LlmError) as info:
+        list(NvidiaClient("secret-key", stream_transport=broken).stream_text("s", "u"))
+    assert "secret-key" not in str(info.value)

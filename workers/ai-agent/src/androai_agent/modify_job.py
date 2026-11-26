@@ -18,8 +18,9 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
+from androai_codegen.agent.checks import check_project
 from androai_codegen.agent.loop import AgentConfig, AgentEditProposer
 from androai_codegen.analysis import analyse_import
 from androai_codegen.detect import Detection, detect_zip
@@ -119,8 +120,13 @@ def run_modify_job(
     retrieval: RetrievalConfig | None = None,
     modify: ModifyConfig | None = None,
     progress: Callable[[str, str], None] | None = None,
+    activity: Callable[[dict], None] | None = None,
+    build_check: Callable[[Path, Any], list[str]] | None = None,
 ) -> ModifyJobResult:
-    """``progress(stage, text)`` is called as each step starts; it must not raise or block."""
+    """``progress(stage, text)`` is called as each step starts; ``activity(event)`` receives the
+    agent's structured steps (reads, edits with diffs, thinking time) when mode is "agent".
+    Neither may raise or block. ``build_check(workspace, edited_project)`` may run a real build of
+    the edited project and return its problems; it runs only when the quick static checks pass."""
     started = time.monotonic()
 
     def step(stage: str, text: str) -> None:
@@ -226,6 +232,8 @@ def run_modify_job(
             conversation=request.history,
             config=AgentConfig(max_steps=request.max_agent_steps),
             progress=lambda text: step("agent", text),
+            activity=activity,
+            verify=_verifier(workspace, build_check),
         )
     else:
         step("generate", "Asking the model to propose the edits")
@@ -255,9 +263,12 @@ def run_modify_job(
         approval_requests=outcome.approval_requests,
         deferred_approvals=outcome.deferred_approvals,
         questions=(outcome.question,) if outcome.question else (),
-        problems=tuple(
-            f"[{p.code.value}] {p.path or 'patch'}: {p.message}"
-            for p in outcome.problems
+        problems=(
+            *(
+                f"[{p.code.value}] {p.path or 'patch'}: {p.message}"
+                for p in outcome.problems
+            ),
+            *_blocking_findings(outcome),
         ),
         attempts=outcome.attempts,
         notes=outcome.notes,
@@ -265,6 +276,32 @@ def run_modify_job(
         patch_id=outcome.patch_id,
         **{**common, "warnings": (*common["warnings"], *outcome.warnings)},
     )
+
+
+def _verifier(workspace: Path, build_check: Callable[[Path, Any], list[str]] | None):
+    """The cheap static checks first; the (slow) real build only when they find nothing."""
+
+    def verify(staged) -> list[str]:
+        problems = check_project(staged)
+        if problems or build_check is None:
+            return problems
+        return build_check(workspace, staged)
+
+    return verify
+
+
+def _blocking_findings(outcome) -> tuple[str, ...]:
+    """When the static review refused the change, say which findings (the user needs to know)."""
+    if outcome.outcome is not ModifyOutcome.REJECTED or outcome.review is None:
+        return ()
+    found = outcome.review.blocking_findings
+    lines = tuple(
+        f"{f.file}{':' + str(f.line) if f.line else ''}: [{f.rule}] {f.description}"[:300]
+        for f in found[:5]
+    )
+    if len(found) > 5:
+        lines += (f"... and {len(found) - 5} more blocking findings",)
+    return lines
 
 
 _STATUS: dict[ModifyOutcome, Status] = {

@@ -466,3 +466,36 @@ def test_repeated_edits_to_one_file_trigger_a_nudge(go, project):
     go(model)
     assert "already edited" not in model.prompts[2]
     assert "already edited" in model.prompts[3] and "(3 times)" in model.prompts[3]
+
+
+def test_structured_activity_has_thinking_reads_and_edit_diffs(go):
+    events = []
+    model = Script(
+        tool("read_file", "check the text", path=STRINGS),
+        tool("edit_file", "reword", path=STRINGS, old=EMPTY, new=EMPTY.replace("Nothing to do", "All done!")),
+        tool("read_file", path="missing/file.kt"),
+        tool("finish", summary="x"),
+    )
+    go(model, activity=events.append)
+    kinds = [e["kind"] for e in events]
+    assert kinds.count("thought") == 4 and kinds.count("read") == 2 and kinds.count("edit") == 1
+    assert events[0]["kind"] == "thought" and events[0]["title"].startswith("Thought for ")
+    assert events[0]["note"] == "check the text"
+    read = next(e for e in events if e["kind"] == "read")
+    assert read["title"] == "Read " + STRINGS and read["path"] == STRINGS and read["ok"] is True
+    edit = next(e for e in events if e["kind"] == "edit")
+    assert edit["hunks"] == [{"old": EMPTY[:700], "new": EMPTY.replace("Nothing to do", "All done!")[:700]}]
+    failed = [e for e in events if e["kind"] == "read" and not e["ok"]]
+    assert len(failed) == 1 and failed[0]["note"].startswith("error")
+
+
+def test_a_broken_activity_listener_never_stops_the_agent(go, project):
+    def boom(_event):
+        raise RuntimeError("listener bug")
+
+    model = Script(
+        tool("edit_file", path=STRINGS, old=EMPTY, new=EMPTY.replace("Nothing to do", "Fine")),
+        tool("finish", summary="done"),
+    )
+    result, _ = go(model, activity=boom)
+    assert result.outcome is ModifyOutcome.COMPLETED

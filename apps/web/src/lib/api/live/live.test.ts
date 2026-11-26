@@ -136,7 +136,7 @@ describe("401 handling", () => {
 
 describe("pending features", () => {
   it("answers 501 not_implemented for endpoints with no backend, which screens show as 'waiting'", async () => {
-    for (const key of ["billing.plans", "usage.summary", "preview.start", "ui.screens", "projects.terminal.create", "tests.cases"] as const) {
+    for (const key of ["billing.plans", "usage.summary", "ui.screens", "projects.terminal.create", "tests.cases"] as const) {
       const e = await call(key, { params: { projectId: "p", taskId: "t", jobId: "j" } }).catch((x) => x);
       expect(e).toMatchObject({ status: 501, code: "not_implemented", endpoint: key });
       expect(isPendingBackend(e)).toBe(true);
@@ -153,7 +153,7 @@ describe("pending features", () => {
     const live = (Object.keys(ENDPOINTS) as EndpointKey[]).filter((k) => ENDPOINTS[k].status === "live" && ENDPOINTS[k].method !== "SSE");
     for (const key of live) {
       calls.length = 0;
-      const e = await call(key, { params: { projectId: "p", buildId: "b", jobId: "j", artifactId: "a", uploadId: "u", taskId: "t", changeSetId: "c" }, query: { path: "x", q: "y" }, body: {} }).catch((x) => x);
+      const e = await call(key, { params: { projectId: "p", buildId: "b", jobId: "j", artifactId: "a", uploadId: "u", taskId: "t", changeSetId: "c", sessionId: "s" }, query: { path: "x", q: "y" }, body: {} }).catch((x) => x);
       expect((e as { code?: string } | undefined)?.code, `${key} is marked live but has no handler`).not.toBe("not_implemented");
     }
   });

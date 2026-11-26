@@ -30,7 +30,8 @@ router.include_router(testruns.router, prefix="/tests")
 router.include_router(worker.router, prefix="/worker")
 if os.environ.get("AGENT_DEV_BRIDGE") == "1":
     # DEV ONLY: in-process stand-in for the agent API (see agent_dev.py). Never set in production.
-    from . import agent_dev
+    from . import agent_dev, preview_dev
 
     router.include_router(agent_dev.router, prefix="/agent")
+    router.include_router(preview_dev.router, prefix="/agent")  # live emulator preview (dev only)
 # Not yet implemented (see docs/BACKEND_PROGRESS.md): /agent (except the dev bridge), /usage, /billing

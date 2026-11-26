@@ -30,6 +30,7 @@ os.environ.setdefault("APP_URL", "http://localhost:3000")
 # AI assistant bridge: run the code-modification job inside this process (dev only). It needs the
 # codegen library and the ai-agent job module importable, and the NVIDIA_* settings from .env.
 os.environ.setdefault("AGENT_DEV_BRIDGE", "1")
+os.environ.setdefault("AGENT_DEV_STATE", str(DATA / "agent_state.json"))  # chats survive restarts
 for _src in (ROOT / "packages/agent-core/codegen/src", ROOT / "workers/ai-agent/src"):
     if str(_src) not in sys.path:
         sys.path.insert(0, str(_src))

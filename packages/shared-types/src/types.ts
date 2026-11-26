@@ -338,6 +338,13 @@ export interface AgentTimelineEvent {
   title: string;
   detail?: string;
   files?: string[];
+  /** Structured agent activity: what kind of step this was, and (for edits) what changed. */
+  kind?: "thought" | "read" | "list" | "search" | "edit" | "write" | "delete" | "move" | "rename" | "check";
+  path?: string;
+  note?: string;
+  seconds?: number;
+  hunks?: { old: string; new: string }[];
+  ok?: boolean;
 }
 export interface PlanStep {
   id: string;
@@ -390,6 +397,8 @@ export type AgentStreamEvent =
   | { type: "task.updated"; task: AgentTask }
   | { type: "timeline.appended"; event: AgentTimelineEvent }
   | { type: "message.completed"; message: ChatMessage }
+  /** The assistant's answer so far (cumulative, so replays are harmless). */
+  | { type: "message.delta"; messageId: string; content: string }
   | { type: "changeset.ready"; changeSet: ChangeSet };
 export type ProjectStreamEvent =
   | { type: "build.updated"; buildId: string; status: BuildStatus }

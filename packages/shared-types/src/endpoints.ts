@@ -108,8 +108,11 @@ export const ENDPOINTS = {
   "admin.workers": e("GET", "/api/v1/admin/workers", B, "live"),
   "admin.audit": e("GET", "/api/v1/admin/audit-logs", B, "live"),
   // preview / visual editor
-  "preview.start": e("POST", "/api/v1/projects/{projectId}/preview", "infra", "planned"),
-  "preview.stop": e("DELETE", "/api/v1/projects/{projectId}/preview/{sessionId}", "infra", "planned"),
+  // live emulator preview: served by the dev-only bridge (apps/api .../preview_dev.py) when
+  // AGENT_DEV_BRIDGE=1 (builds the APK locally and runs it on an emulator); a real deployment answers
+  // 404, which the Preview tab shows as "the emulator service isn't connected yet"
+  "preview.start": e("POST", "/api/v1/agent/projects/{projectId}/preview", A, "live"),
+  "preview.stop": e("DELETE", "/api/v1/agent/projects/{projectId}/preview/{sessionId}", A, "live"),
   "ui.screens": e("GET", "/api/v1/projects/{projectId}/ui/screens", "codegen", "planned"),
   "ui.screen": e("GET", "/api/v1/projects/{projectId}/ui/screens/{screenId}", "codegen", "planned"),
   "ui.edits": e("POST", "/api/v1/projects/{projectId}/ui/screens/{screenId}/edits", "codegen", "planned"),

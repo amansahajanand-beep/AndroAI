@@ -1,5 +1,6 @@
 """The dev-only agent bridge: send a prompt, a thread runs the modify job, the user accepts the diff."""
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -60,6 +61,7 @@ class FakeNvidia:
 def fake_model(monkeypatch):
     import androai_codegen.llm_nvidia as nv
 
+    monkeypatch.setenv("AGENT_VERIFY_BUILD", "0")  # never start a real Gradle build in tests
     monkeypatch.setattr(nv, "NvidiaClient", FakeNvidia)
     FakeNvidia.script = list(EDIT_STEPS)
     FakeNvidia.prompts = []
@@ -257,5 +259,65 @@ def test_package_rename_flows_through_the_panel_and_accepting_applies_it(client,
 def test_every_agent_step_appears_on_the_timeline(client, todo_project):
     pid, h = todo_project
     task = wait_done(client, h, send(client, h, pid)["task"]["id"])
-    titles = [e["title"] for e in client.get(f"{A}/tasks/{task['id']}/timeline", headers=h).json()]
-    assert any(t.startswith("Reading") for t in titles) and any(t.startswith("Editing") for t in titles)
+    rows = client.get(f"{A}/tasks/{task['id']}/timeline", headers=h).json()
+    kinds = [e.get("kind") for e in rows]
+    assert "thought" in kinds and "read" in kinds and "edit" in kinds
+    read = next(e for e in rows if e.get("kind") == "read")
+    assert read["title"].startswith("Read ") and read["path"] and read["ok"] is True
+    edit = next(e for e in rows if e.get("kind") == "edit")
+    assert edit["title"].startswith("Edited ") and edit["hunks"][0]["new"] != edit["hunks"][0]["old"]
+    assert any(e["title"] == "Writing the summary" for e in rows)
+
+
+def test_the_summary_streams_into_the_message_as_cumulative_deltas(client, todo_project):
+    pid, h = todo_project
+    task = wait_done(client, h, send(client, h, pid)["task"]["id"])
+    body = client.get(f"{A}/tasks/{task['id']}/events", headers=h).text
+    deltas = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ") and '"message.delta"' in line]
+    assert len(deltas) > 3
+    contents = [d["content"] for d in deltas]
+    assert all(b.startswith(a) for a, b in zip(contents, contents[1:]))  # only ever grows
+    final = [m for m in client.get(f"{A}/projects/{pid}/messages", headers=h).json() if m.get("changeSetId")][-1]
+    assert final["content"] == contents[-1] and "Static review" in final["content"]
+
+
+def test_chat_survives_a_restart_and_a_running_task_is_marked_interrupted(tmp_path, monkeypatch):
+    from androai_api.api.v1 import agent_dev
+
+    monkeypatch.setenv("AGENT_DEV_STATE", str(tmp_path / "state.json"))
+    store = agent_dev._Store()
+    task = agent_dev._new_task("p1", "t1", "do it", "modify")
+    task["status"] = "generating"
+    store.tasks[task["id"]] = task
+    store.messages["p1"] = [
+        agent_dev._message("user", "do it", taskId=task["id"]),
+        agent_dev._message("assistant", "Working on your request…", taskId=task["id"]),
+    ]
+    store.save(force=True)
+
+    fresh = agent_dev._Store()
+    fresh.load()
+    assert [m["role"] for m in fresh.messages["p1"]] == ["user", "assistant"]
+    restored = fresh.tasks[task["id"]]
+    assert restored["status"] == "failed" and "restarted" in restored["errorMessage"]
+    assert "restarted" in fresh.messages["p1"][1]["content"]
+
+
+def test_a_decision_may_accept_a_large_rename():
+    from androai_api.api.v1.agent_dev import DecisionIn
+
+    assert len(DecisionIn(acceptPaths=[f"f{i}.kt" for i in range(3000)]).acceptPaths) == 3000
+
+
+def test_export_downloads_the_current_project_as_a_zip_and_is_tenant_scoped(client, todo_project):
+    import io
+    import zipfile
+
+    pid, h = todo_project
+    res = client.get(f"{A}/projects/{pid}/export", headers=h)
+    assert res.status_code == 200 and res.headers["content-type"] == "application/zip"
+    assert "attachment" in res.headers["content-disposition"] and ".zip" in res.headers["content-disposition"]
+    names = zipfile.ZipFile(io.BytesIO(res.content)).namelist()
+    assert any(n.endswith("build.gradle.kts") or n.endswith("AndroidManifest.xml") for n in names)
+    client.cookies.clear()
+    assert client.get(f"{A}/projects/{pid}/export").status_code in (401, 403)

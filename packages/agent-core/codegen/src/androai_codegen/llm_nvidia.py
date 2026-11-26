@@ -16,7 +16,7 @@ import re
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TypeVar
 
@@ -53,6 +53,64 @@ def _urllib_transport(
         raise LlmError(f"network error: {type(exc).__name__}") from None
 
 
+StreamTransport = Callable[[str, dict[str, str], bytes, float], Iterator[bytes]]
+
+
+def _urllib_stream(
+    url: str, headers: dict[str, str], body: bytes, timeout: float
+) -> Iterator[bytes]:
+    """The reply body line by line, as it arrives."""
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")  # noqa: S310
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            if response.status != 200:
+                raise LlmError(f"the API call failed (HTTP {response.status})")
+            yield from response
+    except urllib.error.HTTPError as exc:
+        raise LlmError(f"the API call failed (HTTP {exc.code})") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise LlmError(f"network error: {type(exc).__name__}") from None
+
+
+class _ThinkFilter:
+    """Drops a reasoning model's <think>...</think> text from a stream of pieces."""
+
+    def __init__(self) -> None:
+        self._pending = ""
+        self._inside = False
+
+    def feed(self, piece: str) -> str:
+        self._pending += piece
+        out = ""
+        while True:
+            if self._inside:
+                end = self._pending.lower().find("</think>")
+                if end < 0:
+                    self._pending = self._pending[-8:]  # keep a possible partial closing tag
+                    return out
+                self._pending = self._pending[end + 8 :]
+                self._inside = False
+                continue
+            start = self._pending.lower().find("<think>")
+            if start >= 0:
+                out += self._pending[:start]
+                self._pending = self._pending[start + 7 :]
+                self._inside = True
+                continue
+            keep = 0  # hold back a possible partial "<think>" at the end
+            for n in range(min(6, len(self._pending)), 0, -1):
+                if "<think>".startswith(self._pending[-n:].lower()):
+                    keep = n
+                    break
+            out += self._pending[: len(self._pending) - keep]
+            self._pending = self._pending[len(self._pending) - keep :]
+            return out
+
+    def flush(self) -> str:
+        rest, self._pending = ("" if self._inside else self._pending), ""
+        return rest
+
+
 class NvidiaClient:
     def __init__(
         self,
@@ -64,6 +122,7 @@ class NvidiaClient:
         max_attempts: int = 3,
         temperature: float = 0.1,
         transport: Transport | None = None,
+        stream_transport: StreamTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         key = api_key or os.environ.get("NVIDIA_API_KEY")
@@ -78,6 +137,7 @@ class NvidiaClient:
         self.max_attempts = max(1, max_attempts)
         self.temperature = temperature
         self._transport = transport or _urllib_transport
+        self._stream_transport = stream_transport or _urllib_stream
         self._sleep = sleep
         self.usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
         # Optional override of the per-call reply limit (NVIDIA_MAX_OUTPUT_TOKENS in .env).
@@ -102,6 +162,51 @@ class NvidiaClient:
         Some models answer a "next step" prompt with several steps in a row; this keeps them instead
         of throwing all but the first away. Pieces that do not validate are skipped."""
         return self._complete(system, user, output, max_output_tokens, max(1, limit))
+
+    def stream_text(
+        self, system: str, user: str, *, max_output_tokens: int = 600
+    ) -> Iterator[str]:
+        """Plain text from the model, piece by piece as it is generated (no JSON, no retries)."""
+        body = json.dumps(
+            {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "max_tokens": max_output_tokens,
+                "temperature": 0.3,
+                "stream": True,
+            }
+        ).encode("utf-8")
+        headers = {
+            "Authorization": f"Bearer {self._key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "User-Agent": "androai-codegen",
+        }
+        think = _ThinkFilter()
+        for raw in self._stream_transport(
+            f"{self.base_url}/chat/completions", headers, body, self.timeout
+        ):
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                choice = json.loads(payload)["choices"][0]
+                piece = (choice.get("delta") or {}).get("content") or ""
+            except (ValueError, KeyError, IndexError, TypeError):
+                continue
+            shown = think.feed(piece) if piece else ""
+            if shown:
+                yield shown
+        tail = think.flush()
+        if tail:
+            yield tail
+        self.usage["calls"] += 1
 
     def _complete(
         self, system: str, user: str, output: type[T], max_output_tokens: int, limit: int

@@ -194,3 +194,61 @@ def test_set_application_id_changes_only_gradle(staged):
     assert {c.path for c in staged.changes()} == {gradle}
     with pytest.raises(ToolError, match="at least two"):
         staged.set_application_id("x")
+
+
+# ---- Firebase config after a rename ------------------------------------------------------------
+
+import json  # noqa: E402
+
+FIREBASE = {
+    "project_info": {"project_number": "123", "project_id": "demo"},
+    "client": [
+        {
+            "client_info": {
+                "mobilesdk_app_id": "1:123:android:abc",
+                "android_client_info": {"package_name": OLD},
+            },
+            "api_key": [{"current_key": "AIzaSyDEMO-not-a-real-key-000000000000000"}],
+        }
+    ],
+    "configuration_version": "1",
+}
+
+
+def _clients(text):
+    return [c["client_info"]["android_client_info"]["package_name"] for c in json.loads(text)["client"]]
+
+
+def test_add_firebase_client_copies_the_old_entry_for_the_new_package():
+    text = json.dumps(FIREBASE, indent=2) + "\n"
+    out = packages.add_firebase_client(text, NEW, [OLD])
+    assert _clients(out) == [OLD, NEW] and out.endswith("\n")
+    copied = json.loads(out)["client"][1]
+    assert copied["api_key"] == FIREBASE["client"][0]["api_key"]  # real keys are kept, not masked
+    assert out.startswith('{\n  "project_info"')  # the file's own indent is kept
+    assert packages.add_firebase_client(out, NEW, [OLD]) is None  # already there: nothing to add
+
+
+def test_add_firebase_client_ignores_other_json():
+    for text in ('{"package_name": "com.example.todo"}', "not json", '{"client": []}', '{"client": [{}]}'):
+        assert packages.add_firebase_client(text, NEW, [OLD]) is None
+
+
+def test_rename_package_keeps_the_firebase_config_buildable(staged, put):
+    put("app/google-services.json", json.dumps(FIREBASE, indent=2))
+    fresh = StagedFiles(staged.engine)
+    result = fresh.rename_package(OLD, NEW)
+    assert "added a Firebase client entry" in result and "register the new package" in result
+    assert "still mentioning" not in result or "google-services.json" not in result.split("still mentioning")[1]
+    change = next(c for c in fresh.changes() if c.path == "app/google-services.json")
+    assert _clients(change.content) == [OLD, NEW]
+    assert "AIzaSyDEMO" in change.content and "REDACT" not in change.content.upper()
+
+
+def test_set_application_id_also_registers_the_new_id_with_firebase(staged, put):
+    put("app/google-services.json", json.dumps(FIREBASE, indent=2))
+    fresh = StagedFiles(staged.engine)
+    result = fresh.set_application_id("com.acme.notes")
+    assert "Firebase client entry" in result
+    change = next(c for c in fresh.changes() if c.path == "app/google-services.json")
+    assert _clients(change.content) == [OLD, "com.acme.notes"]

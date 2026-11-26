@@ -4,11 +4,10 @@ import json
 import zipfile
 
 import pytest
-from androai_codegen.ingest import OwnershipAttestation
-from sample_project import good_project
-
 from androai_agent import cli
 from androai_agent.modify_job import ModifyJobRequest, run_modify_job
+from androai_codegen.ingest import OwnershipAttestation
+from sample_project import good_project
 
 STRINGS = "app/src/main/res/values/strings.xml"
 EMPTY_LIST = '    <string name="empty_list">Nothing to do</string>'
@@ -340,3 +339,57 @@ def test_the_agent_is_given_a_map_of_the_usual_key_files(tmp_path, todo_zip):
     ):
         assert expected in first, expected
     assert "ExampleUnitTest" not in first  # test sources are not key files
+
+
+def test_a_rejected_review_names_its_blocking_findings():
+    from types import SimpleNamespace as NS
+
+    from androai_agent.modify_job import _blocking_findings
+    from androai_codegen.modify import ModifyOutcome
+
+    finding = lambda n: NS(file=f"A{n}.kt", line=n, rule="import.missing", description="no such class")
+    review = NS(blocking_findings=[finding(i + 1) for i in range(7)])
+    lines = _blocking_findings(NS(outcome=ModifyOutcome.REJECTED, review=review))
+    assert lines[0] == "A1.kt:1: [import.missing] no such class" and len(lines) == 6
+    assert lines[-1] == "... and 2 more blocking findings"
+    assert _blocking_findings(NS(outcome=ModifyOutcome.COMPLETED, review=review)) == ()
+    assert _blocking_findings(NS(outcome=ModifyOutcome.REJECTED, review=None)) == ()
+
+
+# ---- the build check runs only after the quick checks pass -------------------------------------------
+
+
+class _Edited:
+    def __init__(self, files):
+        self.files = files
+
+    def paths(self):
+        return sorted(self.files)
+
+    def text(self, path):
+        return self.files[path]
+
+    def changed(self):
+        return set()
+
+
+def test_the_real_build_runs_only_when_the_quick_checks_are_clean(tmp_path):
+    from androai_agent.modify_job import _verifier
+
+    calls = []
+
+    def build(workspace, edited):
+        calls.append(workspace)
+        return ["e: Foo.kt:1:1 Unresolved reference: Bar"]
+
+    clean = _Edited({"README.md": "hi"})
+    assert _verifier(tmp_path, build)(clean) == ["e: Foo.kt:1:1 Unresolved reference: Bar"]
+    assert calls == [tmp_path]
+
+    gms = 'plugins { id("com.google.gms.google-services") }\nandroid { defaultConfig { applicationId = "com.new.app" } }'
+    config = '{"client": [{"client_info": {"android_client_info": {"package_name": "com.old.app"}}}]}'
+    broken = _Edited({"app/build.gradle.kts": gms, "app/google-services.json": config})
+    problems = _verifier(tmp_path, build)(broken)
+    assert len(problems) == 1 and "com.new.app" in problems[0]
+    assert calls == [tmp_path]  # the slow build did not run on a project the quick checks rejected
+    assert _verifier(tmp_path, None)(clean) == []

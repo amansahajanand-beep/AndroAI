@@ -255,6 +255,8 @@ const handlers: Partial<Record<EndpointKey, Handler>> = {
   "agent.tasks.cancel": (r) => send(r, "POST", `${API}/agent/tasks/${encodeURIComponent(r.params.taskId ?? "")}/cancel`),
   "agent.messages.list": (r) => get(r, `${API}/agent/projects/${pid(r)}/messages`),
   "agent.messages.send": (r) => send(r, "POST", `${API}/agent/projects/${pid(r)}/messages`, r.body),
+  "preview.start": (r) => send(r, "POST", `${API}/agent/projects/${pid(r)}/preview`, r.body ?? {}),
+  "preview.stop": (r) => send(r, "DELETE", `${API}/agent/projects/${pid(r)}/preview/${encodeURIComponent(r.params.sessionId ?? "")}`),
   "agent.changeSets.get": (r) => get(r, `${API}/agent/change-sets/${encodeURIComponent(r.params.changeSetId ?? "")}`),
   "agent.changeSets.decide": (r) =>
     send(r, "POST", `${API}/agent/change-sets/${encodeURIComponent(r.params.changeSetId ?? "")}/decision`, r.body),

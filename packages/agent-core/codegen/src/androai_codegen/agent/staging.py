@@ -321,9 +321,11 @@ class StagedFiles:
             rewritten += new_text != text
         if not rewritten and not moved:
             raise ToolError(f"no file mentions the package {old}")
-        left = self._leftovers(old)
+        firebase = self._register_firebase([old], new)
+        left = [p for p in self._leftovers(old) if p not in firebase]
         note = f"; still mentioning {old} (not changed): {', '.join(left[:5])}" if left else ""
-        return f"renamed {old} -> {new}: {rewritten} files rewritten, {moved} moved{note}"
+        extra = self._firebase_note(firebase, new)
+        return f"renamed {old} -> {new}: {rewritten} files rewritten, {moved} moved{note}{extra}"
 
     def _leftovers(self, old: str) -> list[str]:
         """Text files that still mention the old package (e.g. a JSON service config)."""
@@ -337,6 +339,34 @@ class StagedFiles:
                 found.append(path)
         return found
 
+    def _register_firebase(self, old_ids: list[str], new: str) -> list[str]:
+        """Give each google-services.json a client entry for ``new``
+        so the renamed app still builds. Returns the files that were changed."""
+        changed = []
+        for path in self._all_paths():
+            if path.rsplit("/", 1)[-1] != "google-services.json":
+                continue
+            try:
+                text = self._current(path)
+            except ToolError:
+                continue
+            updated = packages.add_firebase_client(text, new, old_ids)
+            if updated is not None and updated != text:
+                self._touch(path)
+                self._set(path, updated)
+                changed.append(path)
+        return changed
+
+    @staticmethod
+    def _firebase_note(changed: list[str], new: str) -> str:
+        if not changed:
+            return ""
+        return (
+            f"; added a Firebase client entry for {new} to {', '.join(changed)} (a copy of the old "
+            "one, so the app still builds: register the new package in the Firebase console and "
+            "replace the file before relying on Firebase)"
+        )
+
     def set_application_id(self, new: object) -> str:
         if not isinstance(new, str):
             raise ToolError("'application_id' must be text")
@@ -344,11 +374,13 @@ class StagedFiles:
         if problem:
             raise ToolError(f"application id: {problem}")
         total = 0
+        old_ids: list[str] = []
         for path in self._all_paths():
             name = path.rsplit("/", 1)[-1]
             if name not in ("build.gradle", "build.gradle.kts"):
                 continue
             text = self._current(path)
+            old_ids += packages.application_ids(text)
             replaced, count = packages.set_application_id(text, new.strip())
             if count and replaced != text:
                 self._touch(path)
@@ -356,10 +388,26 @@ class StagedFiles:
             total += count
         if not total:
             raise ToolError("no applicationId was found in any build.gradle(.kts) file")
+        firebase = self._register_firebase(old_ids, new.strip())
         return (
             f"set applicationId to {new.strip()} in {total} place(s); "
-            "source packages were not changed"
+            "source packages were not changed" + self._firebase_note(firebase, new.strip())
         )
+
+    # -- a read-only view of the edited project, for checks.ProjectView ---------------------------
+
+    def paths(self) -> list[str]:
+        return self._all_paths()
+
+    def text(self, path: str) -> str | None:
+        """The file as it is now (unmasked), or None if it is binary, huge or missing."""
+        try:
+            return self._current(path)
+        except ToolError:
+            return None
+
+    def changed(self) -> set[str]:
+        return {c.path for c in self.changes()}
 
     # -- results ------------------------------------------------------------------------------
 

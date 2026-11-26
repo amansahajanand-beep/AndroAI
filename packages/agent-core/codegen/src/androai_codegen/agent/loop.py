@@ -25,6 +25,7 @@ from androai_codegen.editing import PatchEngine
 from androai_codegen.modify import ProposalRequest, ProposedEdit, ProposedEdits
 from androai_codegen.proposer import LlmClient, untrusted
 
+from .checks import check_project
 from .staging import StagedFiles, ToolError
 
 TOOL_HELP = """\
@@ -126,6 +127,7 @@ class AgentConfig(BaseModel):
     recent_full: int = Field(default=6, ge=1)  # newest tool results shown in full
     history_chars: int = Field(default=60_000, ge=2000)
     stuck_after: int = Field(default=3, ge=2)  # identical failing calls before giving up
+    verify_rounds: int = Field(default=2, ge=0, le=5)  # rounds to fix what the checks find
 
 
 class AgentStopped(Exception):
@@ -173,11 +175,19 @@ class AgentEditProposer:
         conversation: tuple[tuple[str, str], ...] = (),
         config: AgentConfig | None = None,
         progress: Callable[[str], None] | None = None,
+        activity: Callable[[dict], None] | None = None,
+        verify: Callable[[StagedFiles], list[str]] | None = check_project,
     ) -> None:
         self.client = client
+        # Called on the edited project after the agent finishes; the problems it returns go back to
+        # the agent to fix. None turns the checks off.
+        self.verify = verify
         self.cfg = config or AgentConfig()
         self.staged = StagedFiles(engine)
         self.progress = progress
+        # Structured events for a UI: {"kind": "thought"|"read"|"list"|"search"|"edit"|"write"|...,
+        # "title", "path", "note", "seconds", "hunks": [{"old", "new"}], "ok"}.
+        self.activity = activity
         self._facts = project_facts
         self._hints = hints
         self._conversation = conversation
@@ -203,7 +213,47 @@ class AgentEditProposer:
             self._run.feedback = list(request.feedback)
             budget = self.cfg.max_steps_per_round
         self._loop(self._run, budget)
+        self._verify_and_fix(self._run)
         return self._result(self._run)
+
+    def _verify_and_fix(self, run: _Run) -> None:
+        """Check the edited project; give the agent what is wrong and let it fix it, a few times."""
+        if self.verify is None or run.question or not self.staged.changes():
+            return
+        problems: list[str] = []
+        for round_ in range(self.cfg.verify_rounds + 1):
+            self._tell("Checking the edited project")
+            try:
+                problems = list(self.verify(self.staged))
+            except Exception:  # noqa: BLE001  (a broken check must not lose the work)
+                self._emit("check", title="Could not run the project checks", ok=False)
+                return
+            if not problems:
+                self._emit("check", title="Checked the project: no problems found", ok=True)
+                return
+            self._emit(
+                "check",
+                title=f"Checked the project: {len(problems)} problem(s)",
+                note="\n".join(problems)[:1500],
+                ok=False,
+            )
+            if round_ == self.cfg.verify_rounds:
+                break
+            run.done, run.question = False, None
+            run.feedback = [
+                "The project checks found problems in your changes. Fix them, then finish:",
+                *problems,
+            ]
+            try:
+                self._loop(run, self.cfg.max_steps_per_round)
+            except AgentStopped:
+                break  # keep the work done so far and report what is left
+        left = "; ".join(p[:200] for p in problems[:3])
+        run.summary = (
+            (run.summary + " " if run.summary else "")
+            + f"NOTE: the project checks still report {len(problems)} problem(s) that may stop it "
+            f"building: {left}"
+        )
 
     # -- the loop -------------------------------------------------------------------------
 
@@ -248,8 +298,9 @@ class AgentEditProposer:
         """One model call. Several read-only steps in one reply are all kept when the client can."""
         prompt = self._prompt(run)
         many = getattr(self.client, "complete_json_many", None)
+        began = time.monotonic()
         if many is not None:
-            return list(
+            steps = list(
                 many(
                     AGENT_RULES,
                     prompt,
@@ -258,11 +309,16 @@ class AgentEditProposer:
                     limit=MAX_STEPS_PER_REPLY,
                 )
             )
-        return [
-            self.client.complete_json(
-                AGENT_RULES, prompt, AgentStep, max_output_tokens=self.cfg.max_output_tokens
-            )
-        ]
+        else:
+            steps = [
+                self.client.complete_json(
+                    AGENT_RULES, prompt, AgentStep, max_output_tokens=self.cfg.max_output_tokens
+                )
+            ]
+        seconds = round(time.monotonic() - began)
+        note = next((s.note for s in steps if s.note), "")
+        self._emit("thought", title=f"Thought for {seconds}s", note=note, seconds=seconds)
+        return steps
 
     def _handle(self, run: _Run, step: AgentStep, failures: dict[str, int]) -> str | None:
         """Run one step. "stop" ends the run; "change" means the staged files were modified."""
@@ -302,6 +358,7 @@ class AgentEditProposer:
                 raise AgentStopped("the assistant got stuck repeating a failing step")
         if not ok:
             self._tell(f"  that step failed: {result[:140]}")
+        self._emit_step(step, ok, result)
         self._record(run, step, result, ok)
         return None if step.tool in READ_ONLY else "change"
 
@@ -414,6 +471,64 @@ class AgentEditProposer:
         if self.progress is not None:
             with contextlib.suppress(Exception):  # a broken listener must never stop the agent
                 self.progress(text[:200])
+
+    def _emit(self, kind: str, **fields: object) -> None:
+        if self.activity is not None:
+            with contextlib.suppress(Exception):  # a broken listener must never stop the agent
+                self.activity({"kind": kind, **fields})
+
+    def _emit_step(self, step: AgentStep, ok: bool, result: str) -> None:
+        """One structured row per tool call, after it ran (so a failure is shown as a failure)."""
+        if self.activity is None:
+            return
+        a = step.args
+        kind = {
+            "list_dir": "list",
+            "read_file": "read",
+            "search": "search",
+            "edit_file": "edit",
+            "write_file": "write",
+            "delete_file": "delete",
+            "move_file": "move",
+            "rename_package": "rename",
+            "set_application_id": "rename",
+        }.get(step.tool, step.tool)
+        path = str(a.get("path") or a.get("src") or "")
+        title = {
+            "list": f"Listed {path or 'the project root'}",
+            "read": f"Read {path}",
+            "search": f'Searched for "{str(a.get("pattern", ""))[:50]}"',
+            "edit": f"Edited {path}",
+            "write": f"Wrote {path}",
+            "delete": f"Deleted {path}",
+            "move": f"Moved {path} to {a.get('dst', '')}",
+            "rename": (
+                f"Renamed package {a.get('old', '')} to {a.get('new', '')}"
+                if step.tool == "rename_package"
+                else f"Set the application id to {a.get('application_id', '')}"
+            ),
+        }.get(kind, step.tool)
+        hunks: list[dict[str, str]] = []
+        if ok and step.tool == "edit_file":
+            pairs = a.get("edits") if isinstance(a.get("edits"), list) else [a]
+            for pair in pairs[:4]:
+                if isinstance(pair, dict):
+                    hunks.append(
+                        {
+                            "old": str(pair.get("old") or "")[:700],
+                            "new": str(pair.get("new") or "")[:700],
+                        }
+                    )
+        elif ok and step.tool == "write_file":
+            hunks.append({"old": "", "new": str(a.get("content") or "")[:700]})
+        fields: dict[str, object] = {"title": title, "ok": ok}
+        if path:
+            fields["path"] = path
+        if hunks:
+            fields["hunks"] = hunks
+        if not ok:
+            fields["note"] = result[:200]
+        self._emit(kind, **fields)
 
     def _say(self, step: AgentStep) -> None:
         if self.progress is None:
