@@ -10,8 +10,6 @@ import {
   FolderMinus,
   FolderOpen,
   FolderPlus,
-  LayoutGrid,
-  List,
   ListFilter,
   MoreHorizontal,
   Pencil,
@@ -24,7 +22,6 @@ import {
 } from "lucide-react";
 import { PageBody } from "@/components/layout/page";
 import { ErrorState } from "@/components/states/states";
-import { BuildStatusBadge } from "@/components/status/status-badge";
 import { Button } from "@/components/ui/button";
 import {
   ConfirmDialog,
@@ -44,14 +41,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/overlays";
-import { Avatar, Badge, Card, Input, Table, TBody, TD, TH, THead, TR } from "@/components/ui/primitives";
+import { Card, Input } from "@/components/ui/primitives";
 import { useAgentTasks, useProjects, useSession } from "@/lib/api/hooks";
-import { formatRelative } from "@/lib/utils";
 import { useProjectFolders, type ProjectFolder } from "@/stores/project-folders";
 import { pinnedFirst, useProjectPins } from "@/stores/project-pins";
-import { useUiStore } from "@/stores/ui-store";
-import { CardStatus, PinButton, ProjectCard, ProjectCardSkeleton } from "./project-card";
-import { ProjectThumb } from "./project-preview";
+import { NeedsAttention, ProjectList, ProjectListSkeleton } from "./project-list";
 
 /* ------------------------------------------------------------------ */
 /* Sorting and filters                                                  */
@@ -306,8 +300,6 @@ function FolderMenu({ folder, onRename, onDelete }: { folder: ProjectFolder; onR
 export function ProjectsScreen() {
   const projects = useProjects();
   const { data: session } = useSession();
-  const view = useUiStore((s) => s.projectsView);
-  const setView = useUiStore((s) => s.setProjectsView);
   const { folders, placement, create, rename, remove, move } = useProjectFolders();
   const { pinned, toggle: togglePin } = useProjectPins();
 
@@ -355,7 +347,6 @@ export function ProjectsScreen() {
   }, [activeTasks.data]);
 
   const owner = session?.user ? { name: session.user.name, avatarUrl: session.user.avatarUrl } : undefined;
-  const metaFor = (p: Project) => (sort === "updated" ? `Edited ${formatRelative(p.updatedAt)}` : `Created ${formatRelative(p.createdAt)}`);
 
   const toggleFilter = (key: string) =>
     setFilters((prev) => {
@@ -479,8 +470,8 @@ export function ProjectsScreen() {
 
               <DropdownMenu>
                 <DropdownMenuTrigger className={TOOL_BTN}>
-                  {view === "grid" ? <LayoutGrid className="size-4" aria-hidden /> : <List className="size-4" aria-hidden />}
-                  View
+                  <ArrowDownUp className="size-4" aria-hidden />
+                  Sort
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-52">
                   <DropdownMenuLabel className="flex items-center gap-1.5">
@@ -492,16 +483,6 @@ export function ProjectsScreen() {
                         {s.label}
                       </DropdownMenuRadioItem>
                     ))}
-                  </DropdownMenuRadioGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel>Layout</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup value={view} onValueChange={(v) => setView(v as "grid" | "list")}>
-                    <DropdownMenuRadioItem value="grid">
-                      <LayoutGrid /> Grid
-                    </DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="list">
-                      <List /> List
-                    </DropdownMenuRadioItem>
                   </DropdownMenuRadioGroup>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -532,11 +513,7 @@ export function ProjectsScreen() {
 
       {/* Content */}
       {projects.isPending ? (
-        <div className="grid gap-x-5 gap-y-7 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4" aria-busy="true" aria-label="Loading projects">
-          {[0, 1, 2, 3, 4, 5].map((i) => (
-            <ProjectCardSkeleton key={i} style={{ opacity: 1 - i * 0.12 }} />
-          ))}
-        </div>
+        <ProjectListSkeleton />
       ) : projects.isError ? (
         <Card>
           <ErrorState error={projects.error} onRetry={() => projects.refetch()} />
@@ -545,31 +522,10 @@ export function ProjectsScreen() {
         <FirstProjectEmpty />
       ) : (
         <>
-          {/* Folders (top level, when not searching or filtering) */}
-          {showFolders ? (
-            view === "grid" ? (
-              <div className="mb-7 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4" aria-label="Folders">
-                {folders.map((f) => (
-                  <div key={f.id} className="group relative flex items-center gap-3 rounded-xl border border-border bg-card p-3 transition-colors hover:border-border-strong hover:bg-surface-2">
-                    <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-surface-3 text-muted-foreground group-hover:text-foreground" aria-hidden>
-                      <Folder className="size-5" />
-                    </span>
-                    <button type="button" onClick={() => setOpenFolderId(f.id)} className="min-w-0 flex-1 text-left outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:after:ring-2 focus-visible:after:ring-ring">
-                      <span className="block truncate text-[14px] font-semibold">{f.name}</span>
-                      <span className="block text-[12.5px] text-subtle-foreground">
-                        {countIn(f)} {countIn(f) === 1 ? "project" : "projects"}
-                      </span>
-                    </button>
-                    <div className="relative z-10 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 has-data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100">
-                      <FolderMenu folder={f} onRename={() => setRenaming(f)} onDelete={() => setDeleting(f)} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null
-          ) : null}
+          {/* A quiet notice when any project's latest build failed (top level only). */}
+          {!openFolder ? <NeedsAttention projects={all} /> : null}
 
-          {visible.length === 0 && !(view === "list" && showFolders) ? (
+          {visible.length === 0 && !showFolders ? (
             narrowing ? (
               <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border-strong px-6 py-16 text-center">
                 <SearchX className="size-6 text-muted-foreground" aria-hidden />
@@ -591,107 +547,19 @@ export function ProjectsScreen() {
             ) : (
               <p className="py-10 text-center text-[14px] text-muted-foreground">Every project is in a folder.</p>
             )
-          ) : view === "grid" ? (
-            <div className="grid gap-x-5 gap-y-7 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-              {visible.map((p, i) => (
-                <ProjectCard
-                  key={p.id}
-                  project={p}
-                  task={taskByProject.get(p.id)}
-                  index={i}
-                  owner={owner}
-                  meta={metaFor(p)}
-                  actions={menuFor(p)}
-                  pinned={pinned.includes(p.id)}
-                  onTogglePin={() => togglePin(p.id)}
-                />
-              ))}
-            </div>
           ) : (
-            <Card className="overflow-hidden">
-              <Table>
-                <THead>
-                  <TR>
-                    <TH>Name</TH>
-                    <TH className="hidden md:table-cell">Owner</TH>
-                    <TH>Status</TH>
-                    <TH className="hidden sm:table-cell">Created</TH>
-                    <TH className="hidden lg:table-cell">Last edited</TH>
-                    <TH className="w-20">
-                      <span className="sr-only">Pin and folder options</span>
-                    </TH>
-                  </TR>
-                </THead>
-                <TBody>
-                  {showFolders
-                    ? folders.map((f) => (
-                        <TR key={f.id}>
-                          <TD className="py-2.5">
-                            <button type="button" onClick={() => setOpenFolderId(f.id)} className="flex items-center gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                              <span className="grid size-10 place-items-center rounded-xl bg-surface-3 text-muted-foreground" aria-hidden>
-                                <Folder className="size-5" />
-                              </span>
-                              <span>
-                                <span className="block font-medium">{f.name}</span>
-                                <span className="block text-[12.5px] text-subtle-foreground">
-                                  {countIn(f)} {countIn(f) === 1 ? "project" : "projects"}
-                                </span>
-                              </span>
-                            </button>
-                          </TD>
-                          <TD className="hidden md:table-cell" />
-                          <TD />
-                          <TD className="hidden text-muted-foreground sm:table-cell">{formatRelative(f.createdAt)}</TD>
-                          <TD className="hidden lg:table-cell" />
-                          <TD>
-                            <FolderMenu folder={f} onRename={() => setRenaming(f)} onDelete={() => setDeleting(f)} />
-                          </TD>
-                        </TR>
-                      ))
-                    : null}
-                  {visible.map((p) => (
-                    <TR key={p.id} className="group">
-                      <TD className="py-2.5">
-                        <Link href={`/projects/${p.id}/ide`} className="group flex min-w-0 items-center gap-3 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                          <ProjectThumb project={p} />
-                          <span className="min-w-0">
-                            <span className="block truncate font-medium group-hover:underline">{p.name}</span>
-                            <span className="block truncate font-mono text-[12px] text-subtle-foreground">{p.packageName ?? "—"}</span>
-                          </span>
-                        </Link>
-                      </TD>
-                      <TD className="hidden md:table-cell">
-                        {owner ? (
-                          <span className="flex items-center gap-2 text-muted-foreground">
-                            <Avatar name={owner.name} src={owner.avatarUrl} className="size-6 ring-0 [&_span]:text-[10px]" />
-                            <span className="truncate">{owner.name}</span>
-                          </span>
-                        ) : null}
-                      </TD>
-                      <TD>
-                        {p.activeTaskCount > 0 ? (
-                          <span className="text-[13px]">
-                            <CardStatus project={p} task={taskByProject.get(p.id)} />
-                          </span>
-                        ) : p.lastBuild ? (
-                          <BuildStatusBadge status={p.lastBuild.status} />
-                        ) : (
-                          <Badge tone="neutral">No builds</Badge>
-                        )}
-                      </TD>
-                      <TD className="hidden text-muted-foreground sm:table-cell">{formatRelative(p.createdAt)}</TD>
-                      <TD className="hidden text-muted-foreground lg:table-cell">{formatRelative(p.updatedAt)}</TD>
-                      <TD>
-                        <div className="flex items-center justify-end gap-1">
-                          <PinButton pinned={pinned.includes(p.id)} name={p.name} onToggle={() => togglePin(p.id)} />
-                          {menuFor(p)}
-                        </div>
-                      </TD>
-                    </TR>
-                  ))}
-                </TBody>
-              </Table>
-            </Card>
+            <ProjectList
+              projects={visible}
+              folders={showFolders ? folders : []}
+              countIn={countIn}
+              onOpenFolder={setOpenFolderId}
+              folderMenuFor={(f) => <FolderMenu folder={f} onRename={() => setRenaming(f)} onDelete={() => setDeleting(f)} />}
+              taskByProject={taskByProject}
+              owner={owner}
+              pinned={pinned}
+              onTogglePin={togglePin}
+              menuFor={menuFor}
+            />
           )}
         </>
       )}
